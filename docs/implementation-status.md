@@ -1,21 +1,9 @@
 # Implementation status
 
-## Implemented
+Updated: 2026-07-13
 
-- Pure project/effect state model.
-- Reducer for add, remove, reorder, enable, solo, and seed commands.
-- Declarative greyscale definition.
-- Sequential Kotlin pixel pipeline.
-- Generation-gated editor preview rendering.
-- Android image import.
-- Expanded and compact editor layouts.
-- Greyscale effect add, bypass, solo, and removal.
+Implemented: multi-module Android/Compose structure, declarative effect registry, immutable project state, undo/redo, durable image import, autosave, project JSON, recipe v2, conservative SiteBoy v1 import, unsupported-node preservation, greyscale/invert/posterise Kotlin kernels, opacity composition, cancellation and full-resolution PNG export.
 
-## Next
+Validated: the pure Kotlin model, recipe, project-codec and renderer slice compiles with `kotlinc`; `smoke/SmokeTest.kt` passes.
 
-- Project package and atomic save.
-- Reopen and source URI recovery.
-- Recipe v2 codec.
-- Full-resolution PNG export.
-- Before/after viewport gestures.
-- Initial effect definition schema expansion.
+Not yet validated: Gradle dependency resolution, Android compilation, emulator/tablet installation, process recreation, large-image memory behaviour and GitHub Actions.
