@@ -21,6 +21,7 @@ include(
     ":core:model",
     ":core:effects",
     ":core:recipes",
+    ":core:projects",
     ":core:render-api",
     ":core:render-kotlin",
     ":feature:editor",
