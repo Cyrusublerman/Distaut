@@ -53,6 +53,8 @@ The Android build workflow runs for pull requests and pushes to `main`. It:
 5. assembles the debug APK;
 6. uploads the APK and diagnostic reports as workflow artifacts.
 
+The full workflow has been validated on GitHub Actions: wrapper verification, unit tests, lint, debug assembly and artifact upload all pass.
+
 ## Repository boundary
 
 Distaut does not copy SiteBoy's DOM, browser-worker, WebGPU/WebGL or fixed-cache architecture. It ports product contracts and validated effect behaviour into an Android-specific application architecture.
