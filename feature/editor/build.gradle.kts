@@ -7,11 +7,7 @@ plugins {
 android {
     namespace = "com.cyrusublerman.distaut.editor"
     compileSdk = 35
-
-    defaultConfig {
-        minSdk = 26
-    }
-
+    defaultConfig { minSdk = 26 }
     buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -25,7 +21,8 @@ dependencies {
     implementation(project(":core:effects"))
     implementation(project(":core:render-api"))
     implementation(project(":core:render-kotlin"))
-
+    implementation(project(":core:recipes"))
+    implementation(project(":core:projects"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)

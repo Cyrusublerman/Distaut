@@ -7,15 +7,24 @@ sealed interface ParameterValue {
     data class Integer(val value: Int) : ParameterValue
     data class Choice(val value: String) : ParameterValue
     data class Toggle(val value: Boolean) : ParameterValue
+    data class OpaqueJson(val json: String) : ParameterValue
 }
 
 data class SourceAsset(
     val uri: String,
     val displayName: String? = null,
+    val mimeType: String? = null,
     val width: Int,
     val height: Int,
     val checksum: String? = null,
-)
+    val persistedPermission: Boolean = false,
+    val managedCopy: Boolean = false,
+) {
+    init {
+        require(uri.isNotBlank())
+        require(width > 0 && height > 0)
+    }
+}
 
 data class EffectInstance(
     val id: String,
@@ -24,7 +33,18 @@ data class EffectInstance(
     val parameters: Map<String, ParameterValue> = emptyMap(),
     val opacity: Double = 1.0,
     val blendMode: String = "normal",
-)
+    /** Canonical JSON for an effect node that this build cannot resolve. */
+    val opaquePayload: String? = null,
+) {
+    init {
+        require(id.isNotBlank())
+        require(type.isNotBlank())
+        require(opacity in 0.0..1.0)
+        require(blendMode.isNotBlank())
+    }
+
+    val isResolved: Boolean get() = opaquePayload == null
+}
 
 data class ProjectState(
     val schemaVersion: Int = 1,
@@ -44,6 +64,7 @@ data class ProjectState(
         }
     }
 
+    /** Solo means render through this node rather than bypassing its upstream inputs. */
     fun activeEffects(): List<EffectInstance> {
         val enabled = effects.filter { it.enabled }
         val solo = soloEffectId ?: return enabled
@@ -59,11 +80,8 @@ sealed interface EditorCommand {
     data class MoveEffect(val effectId: String, val toIndex: Int) : EditorCommand
     data class SetEffectEnabled(val effectId: String, val enabled: Boolean) : EditorCommand
     data class SetSoloEffect(val effectId: String?) : EditorCommand
-    data class SetParameter(
-        val effectId: String,
-        val key: String,
-        val value: ParameterValue,
-    ) : EditorCommand
+    data class SetParameter(val effectId: String, val key: String, val value: ParameterValue) : EditorCommand
+    data class SetOpacity(val effectId: String, val opacity: Double) : EditorCommand
     data class SetSeed(val seed: Long) : EditorCommand
 }
 
@@ -111,6 +129,11 @@ object ProjectReducer {
                     } else it
                 },
             )
+            is EditorCommand.SetOpacity -> state.copy(
+                effects = state.effects.map {
+                    if (it.id == command.effectId) it.copy(opacity = command.opacity.coerceIn(0.0, 1.0)) else it
+                },
+            )
             is EditorCommand.SetSeed -> state.copy(globalSeed = command.seed)
         }
         return if (next == state) state else next.copy(revision = state.revision + 1)
@@ -119,13 +142,10 @@ object ProjectReducer {
 
 class ProjectHistory(initial: ProjectState, private val capacity: Int = 50) {
     init { require(capacity > 0) }
-
     private val past = ArrayDeque<ProjectState>()
     private val future = ArrayDeque<ProjectState>()
-
     var current: ProjectState = initial
         private set
-
     val canUndo: Boolean get() = past.isNotEmpty()
     val canRedo: Boolean get() = future.isNotEmpty()
 
@@ -136,6 +156,19 @@ class ProjectHistory(initial: ProjectState, private val capacity: Int = 50) {
         while (past.size > capacity) past.removeFirst()
         future.clear()
         current = next
+        return current
+    }
+
+    fun replace(project: ProjectState, clearHistory: Boolean = true): ProjectState {
+        if (clearHistory) {
+            past.clear()
+            future.clear()
+        } else if (project != current) {
+            past.addLast(current)
+            while (past.size > capacity) past.removeFirst()
+            future.clear()
+        }
+        current = project
         return current
     }
 
