@@ -25,6 +25,8 @@ dependencies {
     implementation(project(":core:effects"))
     implementation(project(":core:render-api"))
     implementation(project(":core:render-kotlin"))
+    implementation(project(":core:recipes"))
+    implementation(project(":core:projects"))
 
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)

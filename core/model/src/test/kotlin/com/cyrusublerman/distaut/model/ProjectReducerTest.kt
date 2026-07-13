@@ -19,10 +19,31 @@ class ProjectReducerTest {
 
         history.dispatch(EditorCommand.SetEffectEnabled("second", false))
         assertFalse(history.current.effects.first().enabled)
+        history.dispatch(EditorCommand.SetOpacity("first", 0.25))
+        assertEquals(0.25, history.current.effects.last().opacity)
         assertTrue(history.canUndo)
         history.undo()
-        assertTrue(history.current.effects.first().enabled)
+        assertEquals(1.0, history.current.effects.last().opacity)
         history.redo()
-        assertFalse(history.current.effects.first().enabled)
+        assertEquals(0.25, history.current.effects.last().opacity)
+    }
+
+    @Test
+    fun replacingAProjectClearsHistoryAndRetainsSafeUnknownNodes() {
+        val history = ProjectHistory(ProjectState())
+        history.dispatch(EditorCommand.AddEffect(EffectInstance("a", "greyscale")))
+        val replacement = ProjectState(
+            effects = listOf(
+                EffectInstance(
+                    id = "unknown",
+                    type = "future",
+                    enabled = false,
+                    opaquePayload = "{\"type\":\"future\"}",
+                )
+            )
+        )
+        history.replace(replacement)
+        assertFalse(history.canUndo)
+        assertEquals(replacement, history.current)
     }
 }
