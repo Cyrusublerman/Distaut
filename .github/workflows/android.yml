@@ -1,20 +1,100 @@
-name: Android
+name: Android build
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/setup-gradle@v4
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android API 35
+        run: sdkmanager "platforms;android-35"
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - run: gradle test assembleDebug --stacktrace
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Generate Gradle wrapper when absent
+        shell: bash
+        run: |
+          if [[ ! -f gradlew || ! -f gradle/wrapper/gradle-wrapper.jar ]]; then
+            gradle wrapper --gradle-version 8.9 --distribution-type bin
+          fi
+          chmod +x gradlew
+          ./gradlew --version
+
+      - name: Upload generated wrapper
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-wrapper-bootstrap
+          path: |
+            gradlew
+            gradlew.bat
+            gradle/wrapper/gradle-wrapper.jar
+            gradle/wrapper/gradle-wrapper.properties
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Run unit tests
+        run: |
+          ./gradlew \
+            :core:model:test \
+            :core:effects:test \
+            :core:recipes:test \
+            :core:render-api:test \
+            :core:render-kotlin:test \
+            :core:projects:testDebugUnitTest \
+            :feature:editor:testDebugUnitTest \
+            :app:testDebugUnitTest \
+            --stacktrace --no-daemon
+
+      - name: Run Android lint
+        run: ./gradlew :app:lintDebug --stacktrace --no-daemon
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: distaut-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-build-reports
+          path: |
+            **/build/reports/**
+            **/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 7
