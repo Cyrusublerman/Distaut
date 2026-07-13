@@ -122,6 +122,7 @@ object BuiltInEffects {
         ),
     )
 
+    val registry = EffectRegistry(listOf(Greyscale, Invert, Posterise))
     val OrderedDither = EffectDefinition(
         type = "ordered_dither",
         displayName = "ORDERED DITHER",

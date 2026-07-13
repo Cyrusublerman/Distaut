@@ -10,6 +10,7 @@ sealed interface JsonValue {
     data class StringValue(val value: String) : JsonValue
     data class NumberValue(val raw: String) : JsonValue {
         fun asDouble(): Double = raw.toDouble()
+        fun asLong(): Long = raw.toLong()
         fun asLongExact(): Long {
             require(isIntegral()) { "Expected an integral JSON number, found $raw" }
             return raw.toLong()

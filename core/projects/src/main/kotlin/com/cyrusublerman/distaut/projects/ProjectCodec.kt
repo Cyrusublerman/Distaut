@@ -43,6 +43,7 @@ object ProjectCodec {
     fun decode(text: String, supportedEffectTypes: Set<String>): ProjectDocument {
         val root = JsonCodec.parse(text).asObjectOrNull()
             ?: error("Project root must be a JSON object")
+        val schema = root["schemaVersion"].asNumberOrNull()?.asDouble()?.toInt()
         val schema = root["schemaVersion"].asNumberOrNull()?.asIntExact()
             ?: error("Project schemaVersion is required")
         require(schema == 1) { "Unsupported project schema: $schema" }
@@ -54,6 +55,12 @@ object ProjectCodec {
         val solo = projectObject["soloEffectId"].asStringOrNull()
             ?.takeIf { id -> effects.any { it.id == id } }
         val project = ProjectState(
+            schemaVersion = projectObject["schemaVersion"].asNumberOrNull()?.asDouble()?.toInt() ?: 1,
+            source = projectObject["source"].asObjectOrNull()?.let(::decodeSource),
+            effects = effects,
+            soloEffectId = solo,
+            globalSeed = projectObject["globalSeed"].asNumberOrNull()?.asDouble()?.toLong() ?: 42L,
+            revision = projectObject["revision"].asNumberOrNull()?.asDouble()?.toLong() ?: 0L,
             schemaVersion = projectObject["schemaVersion"].asNumberOrNull()?.asIntExact() ?: 1,
             source = projectObject["source"].asObjectOrNull()?.let(::decodeSource),
             effects = effects,
@@ -64,6 +71,7 @@ object ProjectCodec {
         return ProjectDocument(
             schemaVersion = schema,
             engineVersion = root["engineVersion"].asStringOrNull() ?: "unknown",
+            savedAtEpochMillis = root["savedAtEpochMillis"].asNumberOrNull()?.asDouble()?.toLong() ?: 0L,
             savedAtEpochMillis = root["savedAtEpochMillis"].asNumberOrNull()?.asLongExact() ?: 0L,
             project = project,
         )
@@ -82,6 +90,9 @@ object ProjectCodec {
 
     private fun decodeSource(source: JsonValue.Object): SourceAsset {
         val uri = source["uri"].asStringOrNull() ?: error("Source URI is required")
+        val width = source["width"].asNumberOrNull()?.asDouble()?.toInt()
+            ?: error("Source width is required")
+        val height = source["height"].asNumberOrNull()?.asDouble()?.toInt()
         val width = source["width"].asNumberOrNull()?.asIntExact()
             ?: error("Source width is required")
         val height = source["height"].asNumberOrNull()?.asIntExact()

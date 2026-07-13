@@ -64,6 +64,9 @@ data class ProjectState(
         }
     }
 
+    /**
+     * Solo means "render through this node" rather than bypassing its upstream inputs.
+     */
     /** Solo means render through this node rather than bypassing its upstream inputs. */
     fun activeEffects(): List<EffectInstance> {
         val enabled = effects.filter { it.enabled }
@@ -80,6 +83,11 @@ sealed interface EditorCommand {
     data class MoveEffect(val effectId: String, val toIndex: Int) : EditorCommand
     data class SetEffectEnabled(val effectId: String, val enabled: Boolean) : EditorCommand
     data class SetSoloEffect(val effectId: String?) : EditorCommand
+    data class SetParameter(
+        val effectId: String,
+        val key: String,
+        val value: ParameterValue,
+    ) : EditorCommand
     data class SetParameter(val effectId: String, val key: String, val value: ParameterValue) : EditorCommand
     data class SetOpacity(val effectId: String, val opacity: Double) : EditorCommand
     data class SetSeed(val seed: Long) : EditorCommand
@@ -131,6 +139,9 @@ object ProjectReducer {
             )
             is EditorCommand.SetOpacity -> state.copy(
                 effects = state.effects.map {
+                    if (it.id == command.effectId) {
+                        it.copy(opacity = command.opacity.coerceIn(0.0, 1.0))
+                    } else it
                     if (it.id == command.effectId) it.copy(opacity = command.opacity.coerceIn(0.0, 1.0)) else it
                 },
             )

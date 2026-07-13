@@ -30,6 +30,11 @@ class KotlinPipelineRenderer : RenderBackend {
                 "greyscale" -> GreyscaleKernel.apply(current, request)
                 "invert" -> InvertKernel.apply(current, request)
                 "posterise" -> PosteriseKernel.apply(current, effect.parameters["levels"], request)
+                else -> throw UnsupportedEffectException(effect.id, effect.type)
+            }
+            current = if (effect.opacity >= 1.0) {
+                processed
+            } else {
                 "ordered_dither" -> OrderedDitherKernel.apply(current, effect.parameters["levels"], request)
                 "pixelate" -> PixelateKernel.apply(current, effect.parameters["blockSize"], request)
                 "box_blur" -> BoxBlurKernel.apply(current, effect.parameters["radius"], request)
@@ -53,6 +58,10 @@ class KotlinPipelineRenderer : RenderBackend {
 }
 
 object GreyscaleKernel {
+    /**
+     * Deterministic encoded-sRGB Rec.709 approximation.
+     * Alpha is preserved. Integer coefficients sum to 256.
+     */
     fun apply(source: PixelBuffer, request: RenderRequest? = null): PixelBuffer {
         val output = source.rgba.copyOf()
         var i = 0
@@ -87,6 +96,11 @@ object InvertKernel {
 }
 
 object PosteriseKernel {
+    fun apply(
+        source: PixelBuffer,
+        parameter: ParameterValue?,
+        request: RenderRequest? = null,
+    ): PixelBuffer {
     fun apply(source: PixelBuffer, parameter: ParameterValue?, request: RenderRequest? = null): PixelBuffer {
         val levels = when (parameter) {
             is ParameterValue.Integer -> parameter.value
@@ -100,6 +114,7 @@ object PosteriseKernel {
             if (i and 0x3fff == 0) request?.let(::checkCancelled)
             for (channel in 0..2) {
                 val value = output[i + channel].toInt() and 0xff
+                val level = ((value * denominator + 127) / 255)
                 val level = (value * denominator + 127) / 255
                 output[i + channel] = ((level * 255 + denominator / 2) / denominator).toByte()
             }
@@ -110,6 +125,12 @@ object PosteriseKernel {
 }
 
 object NormalOpacityBlend {
+    fun apply(
+        base: PixelBuffer,
+        processed: PixelBuffer,
+        opacity: Double,
+        request: RenderRequest? = null,
+    ): PixelBuffer {
     fun apply(base: PixelBuffer, processed: PixelBuffer, opacity: Double, request: RenderRequest? = null): PixelBuffer {
         require(base.width == processed.width && base.height == processed.height)
         val amount = opacity.coerceIn(0.0, 1.0)
@@ -124,6 +145,7 @@ object NormalOpacityBlend {
                 val b = processed.rgba[i + channel].toInt() and 0xff
                 output[i + channel] = (a + (b - a) * amount).roundToInt().coerceIn(0, 255).toByte()
             }
+            // Effects currently preserve alpha; the pipeline contract keeps the incoming alpha.
             output[i + 3] = base.rgba[i + 3]
             i += 4
         }

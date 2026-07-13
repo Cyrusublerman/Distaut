@@ -23,6 +23,7 @@ dependencies {
     implementation(project(":core:render-kotlin"))
     implementation(project(":core:recipes"))
     implementation(project(":core:projects"))
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)

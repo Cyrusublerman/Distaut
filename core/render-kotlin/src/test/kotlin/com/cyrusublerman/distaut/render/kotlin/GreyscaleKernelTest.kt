@@ -21,4 +21,30 @@ class GreyscaleKernelTest {
         val result = KotlinPipelineRenderer().render(RenderRequest(1,1,source,listOf(EffectInstance("invert","invert",opacity=0.25),EffectInstance("poster","posterise",parameters=mapOf("levels" to ParameterValue.Integer(2)))),RenderQuality.PREVIEW,42))
         assertContentEquals(byteArrayOf(0,0,255.toByte(),200.toByte()), result.output.rgba)
     }
+
+    @Test
+    fun pipelineSupportsInvertPosteriseAndOpacity() {
+        val source = PixelBuffer(1, 1, byteArrayOf(0, 50, 250.toByte(), 200.toByte()))
+        val result = KotlinPipelineRenderer().render(
+            RenderRequest(
+                generation = 1,
+                sourceRevision = 1,
+                source = source,
+                effects = listOf(
+                    EffectInstance("invert", "invert", opacity = 0.25),
+                    EffectInstance(
+                        "poster",
+                        "posterise",
+                        parameters = mapOf("levels" to ParameterValue.Integer(2)),
+                    ),
+                ),
+                quality = RenderQuality.PREVIEW,
+                globalSeed = 42,
+            )
+        )
+        assertContentEquals(
+            byteArrayOf(0, 0, 255.toByte(), 200.toByte()),
+            result.output.rgba,
+        )
+    }
 }

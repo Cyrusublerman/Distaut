@@ -20,6 +20,11 @@ class ProjectStore(private val context: Context) {
 
     suspend fun saveAutosave(project: ProjectState, engineVersion: String) = withContext(Dispatchers.IO) {
         autosaveDirectory.mkdirs()
+        val document = ProjectDocument(
+            engineVersion = engineVersion,
+            savedAtEpochMillis = System.currentTimeMillis(),
+            project = project,
+        )
         val document = ProjectDocument(engineVersion = engineVersion, savedAtEpochMillis = System.currentTimeMillis(), project = project)
         writeAtomic(autosaveFile, ProjectCodec.encode(document).toByteArray(Charsets.UTF_8))
     }
@@ -29,6 +34,15 @@ class ProjectStore(private val context: Context) {
         ProjectCodec.decode(autosaveFile.readText(), supportedTypes)
     }
 
+    suspend fun saveProject(uri: Uri, project: ProjectState, engineVersion: String) =
+        withContext(Dispatchers.IO) {
+            val document = ProjectDocument(
+                engineVersion = engineVersion,
+                savedAtEpochMillis = System.currentTimeMillis(),
+                project = project,
+            )
+            writeText(uri, ProjectCodec.encode(document))
+        }
     suspend fun saveProject(uri: Uri, project: ProjectState, engineVersion: String) = withContext(Dispatchers.IO) {
         writeText(uri, ProjectCodec.encode(ProjectDocument(engineVersion = engineVersion, savedAtEpochMillis = System.currentTimeMillis(), project = project)))
     }
@@ -46,6 +60,18 @@ class ProjectStore(private val context: Context) {
     }
 
     suspend fun exportPng(uri: Uri, bitmap: Bitmap) = withContext(Dispatchers.IO) {
+        val output = context.contentResolver.openOutputStream(uri, "wt")
+            ?: throw IOException("Unable to open PNG destination")
+        output.use {
+            check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) {
+                "Android bitmap encoder failed"
+            }
+        }
+    }
+
+    private fun writeText(uri: Uri, text: String) {
+        val output = context.contentResolver.openOutputStream(uri, "wt")
+            ?: throw IOException("Unable to open destination")
         val output = context.contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Unable to open PNG destination")
         output.use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) { "Android bitmap encoder failed" } }
     }
@@ -56,6 +82,12 @@ class ProjectStore(private val context: Context) {
     }
 
     private fun readText(uri: Uri, maximumBytes: Int = 16 * 1024 * 1024): String {
+        val input = context.contentResolver.openInputStream(uri)
+            ?: throw IOException("Unable to open document")
+        return input.use {
+            val bytes = it.readBytesLimited(maximumBytes)
+            bytes.toString(Charsets.UTF_8)
+        }
         val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Unable to open document")
         return input.use { it.readBytesLimited(maximumBytes).toString(Charsets.UTF_8) }
     }
@@ -63,12 +95,16 @@ class ProjectStore(private val context: Context) {
     private fun writeAtomic(destination: File, bytes: ByteArray) {
         val temporary = File(destination.parentFile, "${destination.name}.tmp")
         temporary.outputStream().use { output ->
+            output.write(bytes)
+            output.flush()
             output.write(bytes); output.flush()
             if (output is java.io.FileOutputStream) output.fd.sync()
         }
         if (!temporary.renameTo(destination)) {
             destination.delete()
             if (!temporary.renameTo(destination)) {
+                temporary.delete()
+                throw IOException("Unable to replace autosave")
                 temporary.delete(); throw IOException("Unable to replace autosave")
             }
         }

@@ -30,6 +30,16 @@ class ProjectReducerTest {
     fun replacingAProjectClearsHistoryAndRetainsSafeUnknownNodes() {
         val history = ProjectHistory(ProjectState())
         history.dispatch(EditorCommand.AddEffect(EffectInstance("a", "greyscale")))
+        val replacement = ProjectState(
+            effects = listOf(
+                EffectInstance(
+                    id = "unknown",
+                    type = "future",
+                    enabled = false,
+                    opaquePayload = "{\"type\":\"future\"}",
+                )
+            )
+        )
         val replacement = ProjectState(effects = listOf(EffectInstance("unknown", "future", enabled = false, opaquePayload = "{\"type\":\"future\"}")))
         history.replace(replacement)
         assertFalse(history.canUndo)
