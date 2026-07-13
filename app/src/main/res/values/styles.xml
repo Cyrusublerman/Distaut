@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.Distaut" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:statusBarColor">#F5F2EA</item>
+        <item name="android:navigationBarColor">#F5F2EA</item>
+    </style>
+</resources>
