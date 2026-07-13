@@ -123,4 +123,53 @@ object BuiltInEffects {
     )
 
     val registry = EffectRegistry(listOf(Greyscale, Invert, Posterise))
+    val OrderedDither = EffectDefinition(
+        type = "ordered_dither",
+        displayName = "ORDERED DITHER",
+        category = "QUANTISE / DITHER",
+        algorithmVersion = "bayer4-rgb-v1",
+        parameters = listOf(
+            ParameterDefinition.Integer(
+                key = "levels",
+                label = "LEVELS",
+                default = ParameterValue.Integer(2),
+                minimum = 2,
+                maximum = 8,
+            ),
+        ),
+    )
+
+    val Pixelate = EffectDefinition(
+        type = "pixelate",
+        displayName = "PIXELATE",
+        category = "GEOMETRY / SAMPLING",
+        algorithmVersion = "block-average-v1",
+        parameters = listOf(
+            ParameterDefinition.Integer(
+                key = "blockSize",
+                label = "BLOCK SIZE",
+                default = ParameterValue.Integer(8),
+                minimum = 2,
+                maximum = 64,
+            ),
+        ),
+    )
+
+    val BoxBlur = EffectDefinition(
+        type = "box_blur",
+        displayName = "BOX BLUR",
+        category = "BLUR",
+        algorithmVersion = "separable-clamp-v1",
+        parameters = listOf(
+            ParameterDefinition.Integer(
+                key = "radius",
+                label = "RADIUS",
+                default = ParameterValue.Integer(2),
+                minimum = 1,
+                maximum = 32,
+            ),
+        ),
+    )
+
+    val registry = EffectRegistry(listOf(Greyscale, Invert, Posterise, OrderedDither, Pixelate, BoxBlur))
 }

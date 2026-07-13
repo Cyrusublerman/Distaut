@@ -7,11 +7,7 @@ plugins {
 android {
     namespace = "com.cyrusublerman.distaut.editor"
     compileSdk = 35
-
-    defaultConfig {
-        minSdk = 26
-    }
-
+    defaultConfig { minSdk = 26 }
     buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

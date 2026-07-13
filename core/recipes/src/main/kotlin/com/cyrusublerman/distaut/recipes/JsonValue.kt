@@ -11,6 +11,13 @@ sealed interface JsonValue {
     data class NumberValue(val raw: String) : JsonValue {
         fun asDouble(): Double = raw.toDouble()
         fun asLong(): Long = raw.toLong()
+        fun asLongExact(): Long {
+            require(isIntegral()) { "Expected an integral JSON number, found $raw" }
+            return raw.toLong()
+        }
+        fun asIntExact(): Int = asLongExact().also {
+            require(it in Int.MIN_VALUE..Int.MAX_VALUE) { "JSON integer is outside Int range: $raw" }
+        }.toInt()
         fun isIntegral(): Boolean = raw.none { it == '.' || it == 'e' || it == 'E' }
     }
     data class BooleanValue(val value: Boolean) : JsonValue

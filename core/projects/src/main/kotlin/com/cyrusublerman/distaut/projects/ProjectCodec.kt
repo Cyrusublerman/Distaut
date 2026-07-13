@@ -44,6 +44,7 @@ object ProjectCodec {
         val root = JsonCodec.parse(text).asObjectOrNull()
             ?: error("Project root must be a JSON object")
         val schema = root["schemaVersion"].asNumberOrNull()?.asDouble()?.toInt()
+        val schema = root["schemaVersion"].asNumberOrNull()?.asIntExact()
             ?: error("Project schemaVersion is required")
         require(schema == 1) { "Unsupported project schema: $schema" }
         val projectObject = root["project"].asObjectOrNull()
@@ -60,11 +61,18 @@ object ProjectCodec {
             soloEffectId = solo,
             globalSeed = projectObject["globalSeed"].asNumberOrNull()?.asDouble()?.toLong() ?: 42L,
             revision = projectObject["revision"].asNumberOrNull()?.asDouble()?.toLong() ?: 0L,
+            schemaVersion = projectObject["schemaVersion"].asNumberOrNull()?.asIntExact() ?: 1,
+            source = projectObject["source"].asObjectOrNull()?.let(::decodeSource),
+            effects = effects,
+            soloEffectId = solo,
+            globalSeed = projectObject["globalSeed"].asNumberOrNull()?.asLongExact() ?: 42L,
+            revision = projectObject["revision"].asNumberOrNull()?.asLongExact() ?: 0L,
         )
         return ProjectDocument(
             schemaVersion = schema,
             engineVersion = root["engineVersion"].asStringOrNull() ?: "unknown",
             savedAtEpochMillis = root["savedAtEpochMillis"].asNumberOrNull()?.asDouble()?.toLong() ?: 0L,
+            savedAtEpochMillis = root["savedAtEpochMillis"].asNumberOrNull()?.asLongExact() ?: 0L,
             project = project,
         )
     }
@@ -85,6 +93,9 @@ object ProjectCodec {
         val width = source["width"].asNumberOrNull()?.asDouble()?.toInt()
             ?: error("Source width is required")
         val height = source["height"].asNumberOrNull()?.asDouble()?.toInt()
+        val width = source["width"].asNumberOrNull()?.asIntExact()
+            ?: error("Source width is required")
+        val height = source["height"].asNumberOrNull()?.asIntExact()
             ?: error("Source height is required")
         return SourceAsset(
             uri = uri,

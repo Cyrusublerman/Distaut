@@ -41,5 +41,13 @@ class ProjectCodecTest {
             document,
             ProjectCodec.decode(ProjectCodec.encode(document), setOf("posterise")),
         )
+            source = SourceAsset("content://image/1","image.jpg","image/jpeg",4000,3000,"abc",persistedPermission=true),
+            effects = listOf(EffectInstance("p","posterise",parameters=mapOf("levels" to ParameterValue.Integer(5)))),
+            soloEffectId = "p",
+            globalSeed = Long.MAX_VALUE - 1,
+            revision = 7,
+        )
+        val document = ProjectDocument(engineVersion="test",savedAtEpochMillis=Long.MAX_VALUE - 2,project=state)
+        assertEquals(document, ProjectCodec.decode(ProjectCodec.encode(document), setOf("posterise")))
     }
 }

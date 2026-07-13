@@ -67,6 +67,7 @@ data class ProjectState(
     /**
      * Solo means "render through this node" rather than bypassing its upstream inputs.
      */
+    /** Solo means render through this node rather than bypassing its upstream inputs. */
     fun activeEffects(): List<EffectInstance> {
         val enabled = effects.filter { it.enabled }
         val solo = soloEffectId ?: return enabled
@@ -87,6 +88,7 @@ sealed interface EditorCommand {
         val key: String,
         val value: ParameterValue,
     ) : EditorCommand
+    data class SetParameter(val effectId: String, val key: String, val value: ParameterValue) : EditorCommand
     data class SetOpacity(val effectId: String, val opacity: Double) : EditorCommand
     data class SetSeed(val seed: Long) : EditorCommand
 }
@@ -140,6 +142,7 @@ object ProjectReducer {
                     if (it.id == command.effectId) {
                         it.copy(opacity = command.opacity.coerceIn(0.0, 1.0))
                     } else it
+                    if (it.id == command.effectId) it.copy(opacity = command.opacity.coerceIn(0.0, 1.0)) else it
                 },
             )
             is EditorCommand.SetSeed -> state.copy(globalSeed = command.seed)
@@ -150,13 +153,10 @@ object ProjectReducer {
 
 class ProjectHistory(initial: ProjectState, private val capacity: Int = 50) {
     init { require(capacity > 0) }
-
     private val past = ArrayDeque<ProjectState>()
     private val future = ArrayDeque<ProjectState>()
-
     var current: ProjectState = initial
         private set
-
     val canUndo: Boolean get() = past.isNotEmpty()
     val canRedo: Boolean get() = future.isNotEmpty()
 

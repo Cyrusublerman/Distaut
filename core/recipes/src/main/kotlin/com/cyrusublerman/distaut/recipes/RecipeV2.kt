@@ -16,6 +16,7 @@ data class RecipeV2(
 ) {
     init {
         require(schemaVersion == 2) { "Unsupported recipe schema: $schemaVersion" }
+        require(schemaVersion == 2)
         require(engineVersion.isNotBlank())
     }
 }
@@ -63,6 +64,23 @@ object RecipeCodec {
                 RecipeImportResult(decode(text, supportedEffectTypes))
             root["version"].asNumberOrNull()?.asDouble()?.toInt() == 1 ->
                 SiteBoyRecipeV1Importer.import(text)
+        return JsonCodec.stringify(
+            JsonValue.Object(
+                "schemaVersion" to JsonValue.NumberValue(recipe.schemaVersion.toString()),
+                "engineVersion" to JsonValue.StringValue(recipe.engineVersion),
+                "source" to source,
+                "globalSeed" to JsonValue.NumberValue(recipe.globalSeed.toString()),
+                "effects" to JsonValue.Array(recipe.effects.map(EffectJsonCodec::encode)),
+            ),
+            pretty,
+        )
+    }
+
+    fun decodeAny(text: String, supportedEffectTypes: Set<String>): RecipeImportResult {
+        val root = JsonCodec.parse(text).asObjectOrNull() ?: error("Recipe root must be a JSON object")
+        return when {
+            root["schemaVersion"].asNumberOrNull()?.asIntExact() == 2 -> RecipeImportResult(decode(text, supportedEffectTypes))
+            root["version"].asNumberOrNull()?.asIntExact() == 1 -> SiteBoyRecipeV1Importer.import(text)
             else -> error("Unrecognised recipe schema")
         }
     }
@@ -75,6 +93,9 @@ object RecipeCodec {
         require(schema == 2) { "Unsupported recipe schema: $schema" }
         val engineVersion = root["engineVersion"].asStringOrNull()
             ?: error("Recipe engineVersion is required")
+        val root = JsonCodec.parse(text).asObjectOrNull() ?: error("Recipe root must be a JSON object")
+        val schema = root["schemaVersion"].asNumberOrNull()?.asIntExact() ?: error("Recipe schemaVersion is required")
+        require(schema == 2)
         val source = root["source"].asObjectOrNull()
         val effects = root["effects"].asArrayOrNull()?.values
             ?.mapIndexed { index, node -> EffectJsonCodec.decode(node, index, supportedEffectTypes) }
@@ -86,6 +107,11 @@ object RecipeCodec {
             sourceWidth = source?.get("width").asNumberOrNull()?.asDouble()?.toInt(),
             sourceHeight = source?.get("height").asNumberOrNull()?.asDouble()?.toInt(),
             globalSeed = root["globalSeed"].asNumberOrNull()?.asDouble()?.toLong() ?: 42L,
+            engineVersion = root["engineVersion"].asStringOrNull() ?: error("Recipe engineVersion is required"),
+            sourceChecksum = source?.get("checksum").asStringOrNull(),
+            sourceWidth = source?.get("width").asNumberOrNull()?.asIntExact(),
+            sourceHeight = source?.get("height").asNumberOrNull()?.asIntExact(),
+            globalSeed = root["globalSeed"].asNumberOrNull()?.asLongExact() ?: 42L,
             effects = effects,
         )
     }
@@ -134,6 +160,17 @@ object EffectJsonCodec {
         val type = objectNode["type"].asStringOrNull() ?: "unknown"
         val id = objectNode["id"].asStringOrNull()
             ?.takeIf(String::isNotBlank)
+            "parameters" to JsonValue.Object(LinkedHashMap(effect.parameters.mapValues { encodeParameter(it.value) })),
+        )
+    }
+
+    fun decode(node: JsonValue, index: Int, supportedEffectTypes: Set<String>): EffectInstance {
+        val objectNode = node.asObjectOrNull()
+        if (objectNode == null) {
+            return EffectInstance("unresolved-$index", "unknown", enabled = false, opaquePayload = JsonCodec.stringify(node))
+        }
+        val type = objectNode["type"].asStringOrNull() ?: "unknown"
+        val id = objectNode["id"].asStringOrNull()?.takeIf(String::isNotBlank)
             ?: "recipe-$index-${type.replace(Regex("[^A-Za-z0-9_-]"), "_")}"
         val enabled = objectNode["enabled"].asBooleanOrNull() ?: true
         val opacity = objectNode["opacity"].asNumberOrNull()?.asDouble()?.coerceIn(0.0, 1.0) ?: 1.0
@@ -161,6 +198,11 @@ object EffectJsonCodec {
             opacity = opacity,
             blendMode = blendMode,
         )
+        if (type !in supportedEffectTypes) {
+            return EffectInstance(id, type, enabled = false, opacity = opacity, blendMode = blendMode, opaquePayload = JsonCodec.stringify(objectNode))
+        }
+        val parameters = objectNode["parameters"].asObjectOrNull()?.values?.mapValues { decodeParameter(it.value) }.orEmpty()
+        return EffectInstance(id, type, enabled, parameters, opacity, blendMode)
     }
 
     private fun encodeParameter(value: ParameterValue): JsonValue = when (value) {
@@ -170,6 +212,7 @@ object EffectJsonCodec {
         is ParameterValue.Toggle -> JsonValue.BooleanValue(value.value)
         is ParameterValue.OpaqueJson -> runCatching { JsonCodec.parse(value.json) }
             .getOrElse { JsonValue.StringValue(value.json) }
+        is ParameterValue.OpaqueJson -> runCatching { JsonCodec.parse(value.json) }.getOrElse { JsonValue.StringValue(value.json) }
     }
 
     private fun decodeParameter(value: JsonValue): ParameterValue = when (value) {
@@ -192,3 +235,11 @@ private fun String?.jsonStringOrNull(): JsonValue =
 
 private fun Int?.jsonNumberOrNull(): JsonValue =
     this?.let { JsonValue.NumberValue(it.toString()) } ?: JsonValue.NullValue
+            runCatching { ParameterValue.Integer(value.asIntExact()) }.getOrElse { ParameterValue.Decimal(value.asDouble()) }
+        } else ParameterValue.Decimal(value.asDouble())
+        JsonValue.NullValue, is JsonValue.Array, is JsonValue.Object -> ParameterValue.OpaqueJson(JsonCodec.stringify(value))
+    }
+}
+
+private fun String?.jsonStringOrNull(): JsonValue = this?.let(JsonValue::StringValue) ?: JsonValue.NullValue
+private fun Int?.jsonNumberOrNull(): JsonValue = this?.let { JsonValue.NumberValue(it.toString()) } ?: JsonValue.NullValue

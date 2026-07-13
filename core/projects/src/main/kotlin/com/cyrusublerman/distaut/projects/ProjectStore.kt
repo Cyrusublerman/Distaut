@@ -25,6 +25,7 @@ class ProjectStore(private val context: Context) {
             savedAtEpochMillis = System.currentTimeMillis(),
             project = project,
         )
+        val document = ProjectDocument(engineVersion = engineVersion, savedAtEpochMillis = System.currentTimeMillis(), project = project)
         writeAtomic(autosaveFile, ProjectCodec.encode(document).toByteArray(Charsets.UTF_8))
     }
 
@@ -42,6 +43,9 @@ class ProjectStore(private val context: Context) {
             )
             writeText(uri, ProjectCodec.encode(document))
         }
+    suspend fun saveProject(uri: Uri, project: ProjectState, engineVersion: String) = withContext(Dispatchers.IO) {
+        writeText(uri, ProjectCodec.encode(ProjectDocument(engineVersion = engineVersion, savedAtEpochMillis = System.currentTimeMillis(), project = project)))
+    }
 
     suspend fun loadProject(uri: Uri): ProjectDocument = withContext(Dispatchers.IO) {
         ProjectCodec.decode(readText(uri), supportedTypes)
@@ -68,6 +72,12 @@ class ProjectStore(private val context: Context) {
     private fun writeText(uri: Uri, text: String) {
         val output = context.contentResolver.openOutputStream(uri, "wt")
             ?: throw IOException("Unable to open destination")
+        val output = context.contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Unable to open PNG destination")
+        output.use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) { "Android bitmap encoder failed" } }
+    }
+
+    private fun writeText(uri: Uri, text: String) {
+        val output = context.contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Unable to open destination")
         output.bufferedWriter(Charsets.UTF_8).use { it.write(text) }
     }
 
@@ -78,6 +88,8 @@ class ProjectStore(private val context: Context) {
             val bytes = it.readBytesLimited(maximumBytes)
             bytes.toString(Charsets.UTF_8)
         }
+        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Unable to open document")
+        return input.use { it.readBytesLimited(maximumBytes).toString(Charsets.UTF_8) }
     }
 
     private fun writeAtomic(destination: File, bytes: ByteArray) {
@@ -85,6 +97,7 @@ class ProjectStore(private val context: Context) {
         temporary.outputStream().use { output ->
             output.write(bytes)
             output.flush()
+            output.write(bytes); output.flush()
             if (output is java.io.FileOutputStream) output.fd.sync()
         }
         if (!temporary.renameTo(destination)) {
@@ -92,6 +105,7 @@ class ProjectStore(private val context: Context) {
             if (!temporary.renameTo(destination)) {
                 temporary.delete()
                 throw IOException("Unable to replace autosave")
+                temporary.delete(); throw IOException("Unable to replace autosave")
             }
         }
     }

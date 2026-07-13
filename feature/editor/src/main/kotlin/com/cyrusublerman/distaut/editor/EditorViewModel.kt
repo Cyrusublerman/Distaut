@@ -89,16 +89,28 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    init { restoreAutosave() }
+
+    fun importSource(uri: Uri) {
+        viewModelScope.launch {
+            setOperation(true, "IMPORTING IMAGE")
+            runCatching { sourceLoader.importSource(uri) }
+                .onSuccess { loaded ->
+                    dispatch(EditorCommand.SetSource(loaded.asset), render = false)
+                    _uiState.update { it.copy(sourceBitmap = loaded.bitmap, renderedBitmap = loaded.bitmap, operationInProgress = false, message = "IMPORTED ${loaded.asset.displayName ?: "IMAGE"}", error = null) }
+                    scheduleRender(); scheduleAutosave()
+                }
+                .onFailure { failOperation("Image import failed", it) }
+        }
+    }
+
     fun addEffect(type: String) {
         val definition = BuiltInEffects.registry.definition(type) ?: return
         val effect = definition.instantiate(UUID.randomUUID().toString())
         dispatch(EditorCommand.AddEffect(effect))
         _uiState.update { it.copy(selectedEffectId = effect.id) }
     }
-
-    fun setEnabled(effectId: String, enabled: Boolean) =
-        dispatch(EditorCommand.SetEffectEnabled(effectId, enabled))
-
+    fun setEnabled(effectId: String, enabled: Boolean) = dispatch(EditorCommand.SetEffectEnabled(effectId, enabled))
     fun setSolo(effectId: String?) = dispatch(EditorCommand.SetSoloEffect(effectId))
 
     fun setParameter(effectId: String, key: String, value: ParameterValue) =
@@ -306,8 +318,107 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         publishHistoryState()
         if (render) scheduleRender()
         scheduleAutosave()
+    fun setParameter(effectId: String, key: String, value: ParameterValue) = dispatch(EditorCommand.SetParameter(effectId, key, value))
+    fun setOpacity(effectId: String, opacity: Double) = dispatch(EditorCommand.SetOpacity(effectId, opacity))
+    fun moveEffect(effectId: String, delta: Int) {
+        val index = history.current.effects.indexOfFirst { it.id == effectId }
+        if (index >= 0) dispatch(EditorCommand.MoveEffect(effectId, index + delta))
+    }
+    fun remove(effectId: String) {
+        dispatch(EditorCommand.RemoveEffect(effectId))
+        if (_uiState.value.selectedEffectId == effectId) _uiState.update { it.copy(selectedEffectId = null) }
+    }
+    fun select(effectId: String) { _uiState.update { it.copy(selectedEffectId = effectId) } }
+    fun setShowSource(show: Boolean) { _uiState.update { it.copy(showSource = show) } }
+    fun clearMessage() { _uiState.update { it.copy(message = null, error = null) } }
+    fun undo() { history.undo(); publishHistoryState(); scheduleRender(); scheduleAutosave() }
+    fun redo() { history.redo(); publishHistoryState(); scheduleRender(); scheduleAutosave() }
+
+    fun saveProject(uri: Uri) = launchOperation("SAVING PROJECT", "PROJECT SAVED") {
+        projectStore.saveProject(uri, history.current, ENGINE_VERSION)
+        scheduleAutosave()
     }
 
+    fun openProject(uri: Uri) {
+        viewModelScope.launch {
+            setOperation(true, "OPENING PROJECT")
+            runCatching { projectStore.loadProject(uri) }
+                .onSuccess { document ->
+                    history.replace(document.project); publishHistoryState()
+                    _uiState.update { it.copy(selectedEffectId = document.project.effects.firstOrNull()?.id, sourceBitmap = null, renderedBitmap = null, error = null) }
+                    setOperation(false, "PROJECT OPENED")
+                    reopenProjectSource(document.project); scheduleAutosave()
+                }
+                .onFailure { failOperation("Project open failed", it) }
+        }
+    }
+
+    fun saveRecipe(uri: Uri) = launchOperation("SAVING RECIPE", "RECIPE SAVED") {
+        projectStore.saveRecipe(uri, RecipeMapper.fromProject(history.current, ENGINE_VERSION))
+    }
+
+    fun openRecipe(uri: Uri) {
+        viewModelScope.launch {
+            setOperation(true, "OPENING RECIPE")
+            runCatching { projectStore.loadRecipe(uri) }
+                .onSuccess { imported ->
+                    val next = RecipeMapper.applyToProject(imported.recipe, history.current)
+                    history.replace(next, clearHistory = false); publishHistoryState()
+                    _uiState.update { it.copy(selectedEffectId = next.effects.firstOrNull()?.id, operationInProgress = false, message = "RECIPE OPENED — ${next.effects.count { effect -> !effect.isResolved }} UNRESOLVED · ${imported.warnings.size} WARNINGS", error = null) }
+                    scheduleRender(); scheduleAutosave()
+                }
+                .onFailure { failOperation("Recipe open failed", it) }
+        }
+    }
+
+    fun exportPng(uri: Uri) {
+        val asset = history.current.source ?: run { _uiState.update { it.copy(error = "Open an image before exporting") }; return }
+        viewModelScope.launch {
+            setOperation(true, "RENDERING FINAL PNG")
+            runCatching {
+                val fullBitmap = sourceLoader.loadFull(asset)
+                val source = withContext(Dispatchers.Default) { fullBitmap.toPixelBuffer() }
+                fullBitmap.recycle()
+                val context = currentCoroutineContext()
+                val result = withContext(Dispatchers.Default) {
+                    renderer.render(RenderRequest(generation.incrementAndGet(), history.current.revision, source, history.current.activeEffects(), RenderQuality.FINAL, history.current.globalSeed, CancellationProbe { !context.isActive }))
+                }
+                val output = withContext(Dispatchers.Default) { result.output.toBitmap() }
+                projectStore.exportPng(uri, output); output.recycle(); result
+            }.onSuccess { result -> _uiState.update { it.copy(operationInProgress = false, message = "PNG EXPORTED — ${"%.1f".format(result.durationNanos / 1_000_000.0)} MS", error = null) } }
+                .onFailure { failOperation("PNG export failed", it) }
+        }
+    }
+
+    private fun launchOperation(start: String, success: String, block: suspend () -> Unit) {
+        viewModelScope.launch {
+            setOperation(true, start)
+            runCatching { block() }.onSuccess { setOperation(false, success) }.onFailure { failOperation(start.lowercase().replaceFirstChar(Char::uppercase), it) }
+        }
+    }
+
+    private fun restoreAutosave() {
+        viewModelScope.launch {
+            runCatching { projectStore.loadAutosave() }.onSuccess { document ->
+                if (document != null) {
+                    history.replace(document.project); publishHistoryState()
+                    _uiState.update { it.copy(selectedEffectId = document.project.effects.firstOrNull()?.id, message = "AUTOSAVE RESTORED") }
+                    reopenProjectSource(document.project)
+                }
+            }.onFailure { _uiState.update { state -> state.copy(error = "Autosave could not be restored: ${it.message}") } }
+        }
+    }
+
+    private suspend fun reopenProjectSource(project: ProjectState) {
+        val source = project.source ?: return
+        runCatching { sourceLoader.reopen(source) }
+            .onSuccess { bitmap -> _uiState.update { it.copy(sourceBitmap = bitmap, renderedBitmap = bitmap, error = null) }; scheduleRender() }
+            .onFailure { _uiState.update { state -> state.copy(sourceBitmap = null, renderedBitmap = null, error = "Source unavailable: ${it.message ?: source.uri}") } }
+    }
+
+    private fun dispatch(command: EditorCommand, render: Boolean = true) {
+        history.dispatch(command); publishHistoryState(); if (render) scheduleRender(); scheduleAutosave()
+    }
     private fun publishHistoryState() {
         val selected = _uiState.value.selectedEffectId
             ?.takeIf { id -> history.current.effects.any { it.id == id } }
@@ -321,6 +432,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+        val selected = _uiState.value.selectedEffectId?.takeIf { id -> history.current.effects.any { it.id == id } }
+        _uiState.update { it.copy(project = history.current, selectedEffectId = selected, canUndo = history.canUndo, canRedo = history.canRedo) }
+    }
     private fun scheduleAutosave() {
         autosaveJob?.cancel()
         autosaveJob = viewModelScope.launch {
@@ -331,9 +445,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                         it.copy(error = "Autosave failed: ${error.message ?: error::class.java.simpleName}")
                     }
                 }
+                .onFailure { error -> _uiState.update { it.copy(error = "Autosave failed: ${error.message ?: error::class.java.simpleName}") } }
         }
     }
-
     private fun scheduleRender() {
         val sourceBitmap = _uiState.value.sourceBitmap ?: return
         val project = history.current
@@ -393,6 +507,21 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 error = "$prefix: ${error.message ?: error::class.java.simpleName}",
             )
         }
+        renderJob?.cancel(); _uiState.update { it.copy(rendering = true, error = null) }
+        renderJob = viewModelScope.launch(Dispatchers.Default) {
+            val context = currentCoroutineContext()
+            runCatching {
+                renderer.render(RenderRequest(currentGeneration, project.revision, sourceBitmap.toPixelBuffer(), project.activeEffects(), RenderQuality.PREVIEW, project.globalSeed, CancellationProbe { !context.isActive }))
+            }.onSuccess { result ->
+                if (generation.get() == result.generation) _uiState.update { it.copy(renderedBitmap = result.output.toBitmap(), rendering = false, lastRenderDurationMillis = result.durationNanos / 1_000_000.0) }
+            }.onFailure { error ->
+                if (error !is CancellationException && error !is RenderCancelledException && generation.get() == currentGeneration) _uiState.update { it.copy(rendering = false, error = error.message ?: error::class.java.simpleName) }
+            }
+        }
+    }
+    private fun setOperation(inProgress: Boolean, message: String) { _uiState.update { it.copy(operationInProgress = inProgress, message = message, error = null) } }
+    private fun failOperation(prefix: String, error: Throwable) {
+        if (error !is CancellationException) _uiState.update { it.copy(operationInProgress = false, error = "$prefix: ${error.message ?: error::class.java.simpleName}") }
     }
 }
 
@@ -402,10 +531,7 @@ private fun Bitmap.toPixelBuffer(): PixelBuffer {
     val rgba = ByteArray(width * height * 4)
     var byteIndex = 0
     for (argb in pixels) {
-        rgba[byteIndex++] = ((argb shr 16) and 0xff).toByte()
-        rgba[byteIndex++] = ((argb shr 8) and 0xff).toByte()
-        rgba[byteIndex++] = (argb and 0xff).toByte()
-        rgba[byteIndex++] = ((argb ushr 24) and 0xff).toByte()
+        rgba[byteIndex++] = ((argb shr 16) and 0xff).toByte(); rgba[byteIndex++] = ((argb shr 8) and 0xff).toByte(); rgba[byteIndex++] = (argb and 0xff).toByte(); rgba[byteIndex++] = ((argb ushr 24) and 0xff).toByte()
     }
     return PixelBuffer(width, height, rgba)
 }
@@ -414,10 +540,7 @@ private fun PixelBuffer.toBitmap(): Bitmap {
     val pixels = IntArray(width * height)
     var byteIndex = 0
     for (i in pixels.indices) {
-        val r = rgba[byteIndex++].toInt() and 0xff
-        val g = rgba[byteIndex++].toInt() and 0xff
-        val b = rgba[byteIndex++].toInt() and 0xff
-        val a = rgba[byteIndex++].toInt() and 0xff
+        val r = rgba[byteIndex++].toInt() and 0xff; val g = rgba[byteIndex++].toInt() and 0xff; val b = rgba[byteIndex++].toInt() and 0xff; val a = rgba[byteIndex++].toInt() and 0xff
         pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
     }
     return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888)

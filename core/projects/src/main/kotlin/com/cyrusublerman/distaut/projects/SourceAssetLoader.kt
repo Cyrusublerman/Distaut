@@ -19,6 +19,7 @@ data class LoadedSource(
     val asset: SourceAsset,
     val bitmap: Bitmap,
 )
+data class LoadedSource(val asset: SourceAsset, val bitmap: Bitmap)
 
 class SourceAssetLoader(private val context: Context) {
     private val resolver: ContentResolver get() = context.contentResolver
@@ -57,6 +58,38 @@ class SourceAssetLoader(private val context: Context) {
     suspend fun loadFull(asset: SourceAsset): Bitmap = withContext(Dispatchers.IO) {
         val uri = Uri.parse(asset.uri)
         decode(uri, maximumDimension = null, orientation = readOrientation(uri))
+    suspend fun importSource(uri: Uri, previewMaximumDimension: Int = 2560): LoadedSource = withContext(Dispatchers.IO) {
+        val persisted = persistReadPermission(uri)
+        val metadata = queryMetadata(uri)
+        val orientation = readOrientation(uri)
+        val bounds = decodeBounds(uri)
+        val dimensions = orientedDimensions(bounds.first, bounds.second, orientation)
+        val bitmap = decode(uri, previewMaximumDimension, orientation)
+        val checksum = checksum(uri)
+        val durableUri = if (persisted) uri else copyToManagedStorage(uri, checksum, metadata.first)
+        LoadedSource(
+            SourceAsset(
+                uri = durableUri.toString(),
+                displayName = metadata.first,
+                mimeType = metadata.second,
+                width = dimensions.first,
+                height = dimensions.second,
+                checksum = checksum,
+                persistedPermission = persisted,
+                managedCopy = !persisted,
+            ),
+            bitmap,
+        )
+    }
+
+    suspend fun reopen(asset: SourceAsset, previewMaximumDimension: Int = 2560): Bitmap = withContext(Dispatchers.IO) {
+        val uri = Uri.parse(asset.uri)
+        decode(uri, previewMaximumDimension, readOrientation(uri))
+    }
+
+    suspend fun loadFull(asset: SourceAsset): Bitmap = withContext(Dispatchers.IO) {
+        val uri = Uri.parse(asset.uri)
+        decode(uri, null, readOrientation(uri))
     }
 
     private fun decode(uri: Uri, maximumDimension: Int?, orientation: Int): Bitmap {
@@ -74,6 +107,8 @@ class SourceAssetLoader(private val context: Context) {
         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         val input = resolver.openInputStream(uri) ?: throw IOException("Unable to read source image")
         input.use { BitmapFactory.decodeStream(it, null, options) }
+        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+            ?: throw IOException("Unable to read source image")
         require(options.outWidth > 0 && options.outHeight > 0) { "Unsupported image dimensions" }
         return options.outWidth to options.outHeight
     }
@@ -85,6 +120,7 @@ class SourceAssetLoader(private val context: Context) {
         while (maxOf(width / sample, height / sample) > maximumDimension && sample <= 64) {
             sample *= 2
         }
+        while (maxOf(width / sample, height / sample) > maximumDimension && sample <= 64) sample *= 2
         return sample
     }
 
@@ -94,6 +130,8 @@ class SourceAssetLoader(private val context: Context) {
                 ExifInterface.TAG_ORIENTATION,
                 ExifInterface.ORIENTATION_NORMAL,
             )
+        resolver.openInputStream(uri)?.use {
+            ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
         } ?: ExifInterface.ORIENTATION_NORMAL
     }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
 
@@ -112,6 +150,9 @@ class SourceAssetLoader(private val context: Context) {
                 matrix.setRotate(-90f)
                 matrix.postScale(-1f, 1f)
             }
+            ExifInterface.ORIENTATION_TRANSPOSE -> { matrix.setRotate(90f); matrix.postScale(-1f, 1f) }
+            ExifInterface.ORIENTATION_ROTATE_90 -> matrix.setRotate(90f)
+            ExifInterface.ORIENTATION_TRANSVERSE -> { matrix.setRotate(-90f); matrix.postScale(-1f, 1f) }
             ExifInterface.ORIENTATION_ROTATE_270 -> matrix.setRotate(-90f)
             else -> return bitmap
         }
@@ -128,6 +169,13 @@ class SourceAssetLoader(private val context: Context) {
             ExifInterface.ORIENTATION_ROTATE_270 -> height to width
             else -> width to height
         }
+    private fun orientedDimensions(width: Int, height: Int, orientation: Int): Pair<Int, Int> = when (orientation) {
+        ExifInterface.ORIENTATION_TRANSPOSE,
+        ExifInterface.ORIENTATION_ROTATE_90,
+        ExifInterface.ORIENTATION_TRANSVERSE,
+        ExifInterface.ORIENTATION_ROTATE_270 -> height to width
+        else -> width to height
+    }
 
     private fun queryMetadata(uri: Uri): Pair<String?, String?> {
         var displayName: String? = null
@@ -142,6 +190,7 @@ class SourceAssetLoader(private val context: Context) {
         val digest = MessageDigest.getInstance("SHA-256")
         val input = resolver.openInputStream(uri) ?: throw IOException("Unable to checksum source")
         input.use {
+        resolver.openInputStream(uri)?.use {
             val buffer = ByteArray(64 * 1024)
             while (true) {
                 val read = it.read(buffer)
@@ -150,6 +199,8 @@ class SourceAssetLoader(private val context: Context) {
             }
         }
         return digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        } ?: throw IOException("Unable to checksum source")
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     private fun copyToManagedStorage(uri: Uri, checksum: String, displayName: String?): Uri {
@@ -165,6 +216,14 @@ class SourceAssetLoader(private val context: Context) {
             if (!temporary.renameTo(destination)) {
                 temporary.delete()
                 throw IOException("Unable to retain source image")
+        val extension = displayName?.substringAfterLast('.', "")?.takeIf { it.matches(Regex("[A-Za-z0-9]{1,8}")) }?.lowercase()
+        val destination = java.io.File(directory, checksum + extension?.let { ".$it" }.orEmpty())
+        if (!destination.isFile) {
+            val temporary = java.io.File(directory, "${destination.name}.tmp")
+            resolver.openInputStream(uri)?.use { source -> temporary.outputStream().use(source::copyTo) }
+                ?: throw IOException("Unable to copy source image")
+            if (!temporary.renameTo(destination)) {
+                temporary.delete(); throw IOException("Unable to retain source image")
             }
         }
         return Uri.fromFile(destination)
@@ -173,5 +232,6 @@ class SourceAssetLoader(private val context: Context) {
     private fun persistReadPermission(uri: Uri): Boolean = runCatching {
         resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         true
+        resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); true
     }.getOrDefault(false)
 }
