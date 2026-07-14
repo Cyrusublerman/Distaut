@@ -179,6 +179,7 @@ internal fun QuietMessage(text: String) {
 internal fun KeyValue(label: String, value: String) {
     BoxWithConstraints(Modifier.fillMaxWidth().height(ToolbarHeight)) {
         val labelWidth = 9 * F
+        val availableWidth = maxWidth
         Row(Modifier.fillMaxSize()) {
             Box(
                 Modifier
@@ -192,7 +193,7 @@ internal fun KeyValue(label: String, value: String) {
             }
             Box(
                 Modifier
-                    .width((maxWidth - labelWidth).coerceAtLeast(8 * F))
+                    .width((availableWidth - labelWidth).coerceAtLeast(8 * F))
                     .fillMaxHeight()
                     .border(BorderWidth, UiBorder, RectangleShape)
                     .padding(horizontal = F),
