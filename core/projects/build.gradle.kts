@@ -21,5 +21,6 @@ dependencies {
     implementation(project(":core:recipes"))
     implementation(libs.androidx.exifinterface)
     implementation(libs.kotlinx.coroutines.android)
+    implementation("androidx.annotation:annotation:1.9.1")
     testImplementation(kotlin("test"))
 }
