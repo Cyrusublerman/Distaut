@@ -12,8 +12,24 @@ android {
         applicationId = "com.cyrusublerman.distaut"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-dev"
+        versionCode = 3
+        versionName = "0.3.0-dev"
+    }
+
+    signingConfigs {
+        create("sharedDebug") {
+            // Public, development-only key. Never use this configuration for release builds.
+            storeFile = file("distaut-debug.keystore")
+            storePassword = "distaut-debug"
+            keyAlias = "distaut-debug"
+            keyPassword = "distaut-debug"
+        }
+    }
+
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("sharedDebug")
+        }
     }
 
     buildFeatures { compose = true }
