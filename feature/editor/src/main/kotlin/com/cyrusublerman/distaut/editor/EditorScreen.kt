@@ -213,8 +213,13 @@ private fun Workspace(
     viewModel: EditorViewModel,
 ) {
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        if (maxWidth >= 800.dp) {
-            val sidebar = SidebarWidth.coerceAtMost(maxWidth * 0.45f)
+        val workspaceWidth = maxWidth
+        val workspaceHeight = maxHeight
+        if (workspaceWidth >= 800.dp) {
+            val sidebar = SidebarWidth.coerceAtMost(workspaceWidth * 0.45f)
+            val viewportWidth = (
+                workspaceWidth - sidebar - BorderWidth
+                ).coerceAtLeast(20 * F)
             Row(Modifier.fillMaxSize()) {
                 Sidebar(
                     state,
@@ -234,13 +239,14 @@ private fun Workspace(
                 )
                 Viewport(
                     state,
-                    Modifier
-                        .width((maxWidth - sidebar - BorderWidth).coerceAtLeast(20 * F))
-                        .fillMaxHeight(),
+                    Modifier.width(viewportWidth).fillMaxHeight(),
                 )
             }
         } else {
-            val canvas = (maxHeight * 0.52f).coerceAtLeast(18 * F)
+            val canvas = (workspaceHeight * 0.52f).coerceAtLeast(18 * F)
+            val sidebarHeight = (
+                workspaceHeight - canvas - BorderWidth
+                ).coerceAtLeast(18 * F)
             Column(Modifier.fillMaxSize()) {
                 Viewport(state, Modifier.fillMaxWidth().height(canvas))
                 Box(
@@ -257,9 +263,7 @@ private fun Workspace(
                     setMode,
                     exportDiagnostics,
                     viewModel,
-                    Modifier
-                        .fillMaxWidth()
-                        .height((maxHeight - canvas - BorderWidth).coerceAtLeast(18 * F)),
+                    Modifier.fillMaxWidth().height(sidebarHeight),
                 )
             }
         }
