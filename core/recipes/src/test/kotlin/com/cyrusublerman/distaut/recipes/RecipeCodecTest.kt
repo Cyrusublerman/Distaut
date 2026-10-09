@@ -17,6 +17,30 @@ class RecipeCodecTest {
         val node = unknown.effects.single()
         assertFalse(node.enabled)
         assertNotNull(node.opaquePayload)
-        assertTrue(RecipeCodec.encode(unknown).contains("\"custom\""))
+        assertEquals(node, RecipeCodec.decode(RecipeCodec.encode(unknown), setOf("greyscale")).effects.single())
+    }
+}
+
+class UnresolvedRegressionTest {
+    @kotlin.test.Test fun v1GreyscaleSurvivesRepeatedSaveAndReopenWithoutResolution() {
+        val source="""{"version":1,"nodes":[{"type":"greyscale","enabled":true,"params":{"r":1,"g":0,"b":0}}]}"""
+        var recipe=SiteBoyRecipeV1Importer.import(source).recipe
+        val original=recipe.effects.single()
+        repeat(3) {
+            recipe=RecipeCodec.decode(RecipeCodec.encode(recipe),setOf("greyscale"))
+            kotlin.test.assertEquals(original,recipe.effects.single())
+            kotlin.test.assertFalse(recipe.effects.single().enabled)
+        }
+    }
+    @kotlin.test.Test fun previousRawV1PayloadCannotResolveByTypeCollision() {
+        val source="""{"schemaVersion":2,"engineVersion":"old","effects":[{"type":"greyscale","enabled":true,"params":{"r":1}}]}"""
+        val node=RecipeCodec.decode(source,setOf("greyscale")).effects.single()
+        kotlin.test.assertFalse(node.enabled)
+        kotlin.test.assertNotNull(node.opaquePayload)
+    }
+    @kotlin.test.Test fun algorithmAndCompositionVersionsRoundTrip() {
+        val source="""{"schemaVersion":3,"engineVersion":"test","effects":[{"id":"d","type":"ordered_dither","algorithmVersion":"bayer4-rgb-v2","compositionVersion":2}]}"""
+        val recipe=RecipeCodec.decode(source,setOf("ordered_dither"))
+        kotlin.test.assertEquals(recipe,RecipeCodec.decode(RecipeCodec.encode(recipe),setOf("ordered_dither")))
     }
 }

@@ -19,6 +19,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,6 +59,7 @@ internal fun PipelinePanel(state: EditorUiState, viewModel: EditorViewModel) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         BlockTitle("Source")
         SourceSummary(state)
+        state.warnings.forEach { QuietMessage(it) }
         BlockTitle("Stack")
         PartitionButton(
             if (showCatalogue) "− CLOSE EFFECT CATALOGUE" else "+ ADD EFFECT",
@@ -125,36 +135,26 @@ private fun EffectNode(
 ) {
     val selected = state.selectedEffectId == effect.id
     val definition = BuiltInEffects.registry.definition(effect.type)
+    var menu by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().border(BorderWidth, UiBorder, RectangleShape)) {
         BoxWithConstraints(Modifier.fillMaxWidth().height(NodeHeight)) {
-            val actionWidth = NodeHeight
-            val labelWidth = (maxWidth - actionWidth * 5).coerceAtLeast(6 * F)
             Row(Modifier.fillMaxSize()) {
-                NodeCell("↑", actionWidth) { viewModel.moveEffect(effect.id, -1) }
-                NodeCell("↓", actionWidth) { viewModel.moveEffect(effect.id, 1) }
-                NodeCell(
-                    if (effect.enabled) "✓" else "□",
-                    actionWidth,
-                    enabled = effect.isResolved,
-                    active = effect.enabled,
-                ) { viewModel.setEnabled(effect.id, !effect.enabled) }
-                NodeCell(
-                    definition?.displayName ?: "UNRESOLVED ${effect.type}",
-                    labelWidth,
-                    active = selected,
-                    alignStart = true,
-                ) { viewModel.select(effect.id) }
-                NodeCell(
-                    if (state.project.soloEffectId == effect.id) "S!" else "S",
-                    actionWidth,
-                    active = state.project.soloEffectId == effect.id,
-                ) {
-                    viewModel.setSolo(
-                        if (state.project.soloEffectId == effect.id) null
-                        else effect.id,
-                    )
+                NodeCell(if (effect.enabled) "✓" else "□", NodeHeight, enabled = effect.isResolved,
+                    active = effect.enabled, description = "Toggle ${effect.type}") { viewModel.setEnabled(effect.id, !effect.enabled) }
+                NodeCell(if (!effect.isResolved) "UNRESOLVED ${effect.type}" else definition?.displayName ?: effect.type,
+                    (maxWidth - NodeHeight * 3).coerceAtLeast(0.dp), active = selected, alignStart = true) { viewModel.select(effect.id) }
+                NodeCell("VIEW", NodeHeight, active = state.project.soloEffectId == effect.id,
+                    description = "Preview through ${effect.type}; final export is unchanged") {
+                    viewModel.setSolo(if (state.project.soloEffectId == effect.id) null else effect.id)
                 }
-                NodeCell("×", actionWidth) { viewModel.remove(effect.id) }
+                Box {
+                    NodeCell("···", NodeHeight, description = "Actions for ${effect.type}") { menu = true }
+                    DropdownMenu(menu, onDismissRequest = { menu = false }) {
+                        DropdownMenuItem(text = { Text("Move up") }, onClick = { menu = false; viewModel.moveEffect(effect.id, -1) })
+                        DropdownMenuItem(text = { Text("Move down") }, onClick = { menu = false; viewModel.moveEffect(effect.id, 1) })
+                        DropdownMenuItem(text = { Text("Remove") }, onClick = { menu = false; viewModel.remove(effect.id) })
+                    }
+                }
             }
         }
         if (selected) ParameterPanel(effect, definition, viewModel)
@@ -168,6 +168,7 @@ private fun NodeCell(
     enabled: Boolean = true,
     active: Boolean = false,
     alignStart: Boolean = false,
+    description: String = label,
     onClick: () -> Unit,
 ) {
     val background = when {
@@ -181,6 +182,7 @@ private fun NodeCell(
             .fillMaxHeight()
             .background(background)
             .border(BorderWidth, UiBorder, RectangleShape)
+            .semantics { contentDescription = description }
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = if (alignStart) F else 0.dp),
         contentAlignment = if (alignStart) Alignment.CenterStart else Alignment.Center,
@@ -202,96 +204,113 @@ private fun ParameterPanel(
     viewModel: EditorViewModel,
 ) {
     Column(Modifier.fillMaxWidth().background(UiBackground)) {
-        NumericSliderRow(
-            "OPACITY",
-            "${(effect.opacity * 100).roundToInt()}%",
-            effect.opacity.toFloat(),
-            0f..1f,
-            0,
-        ) { viewModel.setOpacity(effect.id, it.toDouble()) }
-
+        NumericSliderRow("OPACITY", "${(effect.opacity * 100).roundToInt()}%", effect.opacity.toFloat(), 0f..1f, 0,
+            finished = viewModel::finishAdjustment, reset = { viewModel.setOpacity(effect.id, 1.0); viewModel.finishAdjustment() }) {
+            viewModel.setOpacity(effect.id, it.toDouble())
+        }
         definition?.parameters?.forEach { parameter ->
             when (parameter) {
                 is ParameterDefinition.Integer -> {
-                    val current = (
-                        effect.parameters[parameter.key] as? ParameterValue.Integer
-                        )?.value ?: parameter.default.value
-                    NumericSliderRow(
-                        parameter.label,
-                        current.toString(),
-                        current.toFloat(),
+                    val current = when (val value = effect.parameters[parameter.key]) {
+                        is ParameterValue.Integer -> value.value
+                        is ParameterValue.Decimal -> value.value.roundToInt()
+                        else -> parameter.default.value
+                    }.coerceIn(parameter.minimum, parameter.maximum)
+                    NumericSliderRow(parameter.label, current.toString(), current.toFloat(),
                         parameter.minimum.toFloat()..parameter.maximum.toFloat(),
-                        ((parameter.maximum - parameter.minimum) /
-                            parameter.step - 1).coerceAtLeast(0),
-                    ) {
-                        viewModel.setParameter(
-                            effect.id,
-                            parameter.key,
-                            ParameterValue.Integer(it.roundToInt()),
-                        )
+                        ((parameter.maximum - parameter.minimum) / parameter.step - 1).coerceAtLeast(0),
+                        finished = viewModel::finishAdjustment, reset = { viewModel.resetParameter(effect.id, parameter.key) }) {
+                        viewModel.setParameter(effect.id, parameter.key, ParameterValue.Integer(it.roundToInt()))
                     }
                 }
-                else -> QuietMessage("${parameter.label}: CONTROL PENDING")
+                is ParameterDefinition.Decimal -> {
+                    val current = (effect.parameters[parameter.key] as? ParameterValue.Decimal)?.value ?: parameter.default.value
+                    NumericSliderRow(parameter.label, "%.3f".format(current), current.toFloat(),
+                        parameter.minimum.toFloat()..parameter.maximum.toFloat(), 0,
+                        finished = viewModel::finishAdjustment, reset = { viewModel.resetParameter(effect.id, parameter.key) }) {
+                        viewModel.setParameter(effect.id, parameter.key, ParameterValue.Decimal(it.toDouble()))
+                    }
+                }
+                is ParameterDefinition.Toggle -> Row(Modifier.fillMaxWidth().padding(horizontal = F), verticalAlignment = Alignment.CenterVertically) {
+                    Text(parameter.label, Modifier.weight(1f))
+                    Switch((effect.parameters[parameter.key] as? ParameterValue.Toggle)?.value ?: parameter.default.value,
+                        onCheckedChange = { viewModel.setParameter(effect.id, parameter.key, ParameterValue.Toggle(it)); viewModel.finishAdjustment() })
+                }
+                is ParameterDefinition.Choice -> {
+                    var expanded by rememberSaveable { mutableStateOf(false) }
+                    val selected = (effect.parameters[parameter.key] as? ParameterValue.Choice)?.value ?: parameter.default.value
+                    Box {
+                        PartitionButton("${parameter.label}: $selected") { expanded = true }
+                        DropdownMenu(expanded, onDismissRequest = { expanded = false }) {
+                            parameter.choices.forEach { choice ->
+                                DropdownMenuItem(text = { Text(choice) }, onClick = {
+                                    expanded = false
+                                    viewModel.setParameter(effect.id, parameter.key, ParameterValue.Choice(choice))
+                                    viewModel.finishAdjustment()
+                                })
+                            }
+                        }
+                    }
+                }
             }
         }
-        if (!effect.isResolved) {
-            QuietMessage("NODE PRESERVED BUT NOT EXECUTABLE IN THIS BUILD")
+        if (!effect.isResolved) QuietMessage("PRESERVED AND DISABLED. ORIGINAL SETTINGS REMAIN IN THE PROJECT.")
+        else if (definition != null && (effect.algorithmVersion != definition.algorithmVersion || effect.compositionVersion < 2)) {
+            QuietMessage("LEGACY RENDERING RETAINED FOR THIS EFFECT")
+            PartitionButton("UPDATE TO CORRECTED ALGORITHM") { viewModel.upgradeEffect(effect.id) }
         }
     }
 }
 
 @Composable
 private fun NumericSliderRow(
-    label: String,
-    valueText: String,
-    value: Float,
-    range: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    change: (Float) -> Unit,
+    label: String, valueText: String, value: Float, range: ClosedFloatingPointRange<Float>, steps: Int,
+    finished: () -> Unit, reset: () -> Unit, change: (Float) -> Unit,
 ) {
-    BoxWithConstraints(
-        Modifier
-            .fillMaxWidth()
-            .height(4 * F)
-            .border(BorderWidth, UiBorder, RectangleShape)
-    ) {
-        val labelWidth = 8 * F
-        val valueWidth = 5 * F
-        val sliderWidth = (maxWidth - labelWidth - valueWidth).coerceAtLeast(8 * F)
-        Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .width(labelWidth)
-                    .fillMaxHeight()
-                    .border(BorderWidth, UiBorder, RectangleShape)
-                    .padding(horizontal = F),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Text(label, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            }
-            Slider(
-                value,
-                change,
-                Modifier.width(sliderWidth).padding(horizontal = F / 2),
-                valueRange = range,
-                steps = steps,
-            )
-            Box(
-                Modifier
-                    .width(valueWidth)
-                    .fillMaxHeight()
-                    .border(BorderWidth, UiBorder, RectangleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(valueText, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            }
+    var editing by rememberSaveable { mutableStateOf(false) }
+    var typed by rememberSaveable { mutableStateOf("") }
+    var error by rememberSaveable { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().border(BorderWidth, UiBorder, RectangleShape)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = F), verticalAlignment = Alignment.CenterVertically) {
+            Text(label, Modifier.weight(1f), fontSize = 12.sp)
+            TextButton(onClick = { typed = value.toString(); error = false; editing = true }) { Text(valueText) }
+            TextButton(onClick = reset) { Text("RESET") }
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            val increment = (range.endInclusive - range.start) / if (steps > 0) (steps + 1) else 100
+            TextButton(onClick = { change((value - increment).coerceIn(range)); finished() }) { Text("−") }
+            Slider(value.coerceIn(range), change, Modifier.weight(1f), valueRange = range, steps = steps,
+                onValueChangeFinished = finished)
+            TextButton(onClick = { change((value + increment).coerceIn(range)); finished() }) { Text("+") }
         }
     }
+    if (editing) AlertDialog(onDismissRequest = { editing = false }, title = { Text(label) },
+        text = { OutlinedTextField(typed, onValueChange = { typed = it; error = false }, singleLine = true,
+            isError = error, label = { Text("${range.start} to ${range.endInclusive}") }) },
+        confirmButton = { TextButton(onClick = {
+            val number = typed.toFloatOrNull()
+            if (number == null || !number.isFinite() || number !in range) error = true
+            else { change(number); finished(); editing = false }
+        }) { Text("APPLY") } },
+        dismissButton = { TextButton(onClick = { editing = false }) { Text("CANCEL") } })
 }
 
 @Composable
 internal fun CanvasPanel(state: EditorUiState, viewModel: EditorViewModel) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        BlockTitle("Inspect")
+        PartitionButton(if (state.fullDetail) "RETURN TO FIT PREVIEW" else "LOAD FULL-RESOLUTION DETAIL", enabled = !state.operationInProgress) {
+            viewModel.setFullDetail(!state.fullDetail)
+        }
+        PartitionButton(if (state.compare) "CLOSE BEFORE / AFTER" else "BEFORE / AFTER WIPE") { viewModel.setCompare(!state.compare) }
+        BlockTitle("Export size")
+        listOf(null, 4096, 2048).forEach { maximum ->
+            PartitionButton(maximum?.let { "AT MOST $it PX" } ?: "FULL RESOLUTION", active = state.exportMaximumDimension == maximum) {
+                viewModel.setExportMaximumDimension(maximum)
+            }
+        }
+        QuietMessage("EXPORT USES THE COMPLETE ENABLED STACK. VIEW THROUGH ONLY CHANGES THE PREVIEW.")
+        state.warnings.forEach { QuietMessage(it) }
         BlockTitle("Canvas")
         KeyValue("DISPLAY", if (state.showSource) "SOURCE" else "OUTPUT")
         KeyValue("REVISION", state.project.revision.toString())

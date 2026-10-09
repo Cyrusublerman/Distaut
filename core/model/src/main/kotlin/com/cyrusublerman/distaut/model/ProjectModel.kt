@@ -35,6 +35,8 @@ data class EffectInstance(
     val blendMode: String = "normal",
     /** Canonical JSON for an effect node that this build cannot resolve. */
     val opaquePayload: String? = null,
+    val algorithmVersion: String? = null,
+    val compositionVersion: Int = 1,
 ) {
     init {
         require(id.isNotBlank())
@@ -65,6 +67,8 @@ data class ProjectState(
     }
 
     /** Solo means render through this node rather than bypassing its upstream inputs. */
+    fun finalEffects(): List<EffectInstance> = effects.filter { it.enabled }
+
     fun activeEffects(): List<EffectInstance> {
         val enabled = effects.filter { it.enabled }
         val solo = soloEffectId ?: return enabled
@@ -83,6 +87,7 @@ sealed interface EditorCommand {
     data class SetParameter(val effectId: String, val key: String, val value: ParameterValue) : EditorCommand
     data class SetOpacity(val effectId: String, val opacity: Double) : EditorCommand
     data class SetSeed(val seed: Long) : EditorCommand
+    data class UpgradeEffect(val effectId: String, val algorithmVersion: String) : EditorCommand
 }
 
 object ProjectReducer {
@@ -134,6 +139,11 @@ object ProjectReducer {
                     if (it.id == command.effectId) it.copy(opacity = command.opacity.coerceIn(0.0, 1.0)) else it
                 },
             )
+            is EditorCommand.UpgradeEffect -> state.copy(effects = state.effects.map {
+                if (it.id == command.effectId && it.isResolved) it.copy(
+                    algorithmVersion = command.algorithmVersion, compositionVersion = 2,
+                ) else it
+            })
             is EditorCommand.SetSeed -> state.copy(globalSeed = command.seed)
         }
         return if (next == state) state else next.copy(revision = state.revision + 1)
@@ -146,20 +156,37 @@ class ProjectHistory(initial: ProjectState, private val capacity: Int = 50) {
     private val future = ArrayDeque<ProjectState>()
     var current: ProjectState = initial
         private set
-    val canUndo: Boolean get() = past.isNotEmpty()
+    private var transactionStart: ProjectState? = null
+    val canUndo: Boolean get() = past.isNotEmpty() || transactionStart?.let { it != current } == true
     val canRedo: Boolean get() = future.isNotEmpty()
 
     fun dispatch(command: EditorCommand): ProjectState {
         val next = ProjectReducer.reduce(current, command)
         if (next == current) return current
-        past.addLast(current)
-        while (past.size > capacity) past.removeFirst()
+        if (transactionStart == null) pushPast(current)
         future.clear()
         current = next
         return current
     }
 
+    fun beginTransaction() { if (transactionStart == null) transactionStart = current }
+
+    fun endTransaction() {
+        val start = transactionStart ?: return
+        transactionStart = null
+        if (start.copy(revision = current.revision) != current) pushPast(start)
+    }
+
+    private fun pushPast(state: ProjectState) {
+        past.addLast(state)
+        while (past.size > capacity) past.removeFirst()
+    }
+
+    fun retainedSources(): Set<SourceAsset> = (past + future + listOfNotNull(current, transactionStart))
+        .mapNotNull { it.source }.toSet()
+
     fun replace(project: ProjectState, clearHistory: Boolean = true): ProjectState {
+        endTransaction()
         if (clearHistory) {
             past.clear()
             future.clear()
@@ -173,6 +200,7 @@ class ProjectHistory(initial: ProjectState, private val capacity: Int = 50) {
     }
 
     fun undo(): ProjectState {
+        endTransaction()
         if (past.isEmpty()) return current
         future.addLast(current)
         current = past.removeLast()
@@ -180,6 +208,7 @@ class ProjectHistory(initial: ProjectState, private val capacity: Int = 50) {
     }
 
     fun redo(): ProjectState {
+        endTransaction()
         if (future.isEmpty()) return current
         past.addLast(current)
         current = future.removeLast()
