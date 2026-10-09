@@ -180,8 +180,8 @@ private fun Toolbar(
         ToolCell(state.project.source?.displayName ?: "OPEN IMAGE", 12 * F, enabled = idle, alignStart = true, onClick = pickImage)
         ToolCell("OPEN", 5 * F, enabled = idle, onClick = openProject)
         ToolCell("SAVE", 5 * F, enabled = idle, onClick = saveProject)
-        ToolCell("UNDO", 5 * F, state.canUndo, onClick = viewModel::undo)
-        ToolCell("REDO", 5 * F, state.canRedo, onClick = viewModel::redo)
+        ToolCell("UNDO", 5 * F, state.canUndo && idle, onClick = viewModel::undo)
+        ToolCell("REDO", 5 * F, state.canRedo && idle, onClick = viewModel::redo)
         ToolCell(if (state.showSource) "SOURCE" else "OUTPUT", 6 * F,
             enabled = state.sourceBitmap != null, active = state.showSource) { viewModel.setShowSource(!state.showSource) }
         ToolCell("EXPORT", 6 * F, enabled = state.project.source != null && idle, onClick = exportPng)

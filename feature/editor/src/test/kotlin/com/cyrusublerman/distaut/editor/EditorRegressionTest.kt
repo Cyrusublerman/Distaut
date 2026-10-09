@@ -20,12 +20,14 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [27])
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
 class EditorRegressionTest {
     private lateinit var app: Application
     private val stores = mutableListOf<ViewModelStore>()
@@ -114,8 +116,8 @@ class EditorRegressionTest {
         assertEquals(40, loaded.bitmap.height)
         val top = loaded.bitmap.getPixel(10, 5)
         val bottom = loaded.bitmap.getPixel(10, 35)
-        assertTrue(Color.red(top) > 200 && Color.blue(top) < 50)
-        assertTrue(Color.blue(bottom) > 200 && Color.red(bottom) < 50)
+        assertTrue(Color.red(top) > 200 && Color.blue(top) < 50, "Expected red at top, got ${Integer.toHexString(top)}")
+        assertTrue(Color.blue(bottom) > 200 && Color.red(bottom) < 50, "Expected blue at bottom, got ${Integer.toHexString(bottom)}")
         loaded.bitmap.recycle()
     }
 }
