@@ -144,8 +144,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         _uiState.update { it.copy(fullDetail = full) }
         reloadSource()
     }
-    fun undo() { cancelSourceLoad(); interactionEpoch++; history.undo(); afterHistoryChange() }
-    fun redo() { cancelSourceLoad(); interactionEpoch++; history.redo(); afterHistoryChange() }
+    fun undo() {
+        if (_uiState.value.operationInProgress && sourceJob?.isActive != true) return
+        cancelSourceLoad(); interactionEpoch++; history.undo(); afterHistoryChange()
+    }
+    fun redo() {
+        if (_uiState.value.operationInProgress && sourceJob?.isActive != true) return
+        cancelSourceLoad(); interactionEpoch++; history.redo(); afterHistoryChange()
+    }
     private fun cancelSourceLoad() {
         if (sourceJob?.isActive == true) {
             sourceJob?.cancel(); sourceGeneration++
@@ -265,7 +271,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
     private fun launchSourceOperation(message: String, block: suspend (Long) -> Unit) {
-        if (exporting) return
+        if (exporting || (_uiState.value.operationInProgress && sourceJob?.isActive != true)) return
         sourceJob?.cancel()
         val ticket = ++sourceGeneration
         previewGeneration.incrementAndGet()
@@ -281,7 +287,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) {
-                if (ticket == sourceGeneration) failOperation(message, error)
+                if (ticket == sourceGeneration) {
+                    _uiState.update { it.copy(operationInProgress = false) }
+                    failOperation(message, error)
+                }
             }
         }
     }
@@ -408,7 +417,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private fun failOperation(prefix: String, error: Throwable) {
         if (error is CancellationException) return
         DiagnosticsLog.error("operation", prefix, error)
-        _uiState.update { it.copy(operationInProgress = false, error = "$prefix: ${error.message}") }
+        _uiState.update { it.copy(error = "$prefix: ${error.message}") }
     }
 }
 
