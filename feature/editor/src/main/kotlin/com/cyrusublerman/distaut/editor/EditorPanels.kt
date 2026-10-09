@@ -145,6 +145,7 @@ private fun EffectNode(
                 NodeCell(if (!effect.isResolved) "UNRESOLVED ${effect.type}" else definition?.displayName ?: effect.type,
                     labelWidth, active = selected, alignStart = true) { viewModel.select(effect.id) }
                 NodeCell("VIEW", NodeHeight, active = state.project.soloEffectId == effect.id,
+                    enabled = effect.enabled && effect.isResolved,
                     description = "Preview through ${effect.type}; final export is unchanged") {
                     viewModel.setSolo(if (state.project.soloEffectId == effect.id) null else effect.id)
                 }
@@ -298,6 +299,12 @@ private fun NumericSliderRow(
 
 @Composable
 internal fun CanvasPanel(state: EditorUiState, viewModel: EditorViewModel) {
+    var confirmCleanup by rememberSaveable { mutableStateOf(false) }
+    if (confirmCleanup) AlertDialog(onDismissRequest = { confirmCleanup = false },
+        title = { Text("Remove unused source copies?") },
+        text = { Text("Current, undo and redo sources are retained. Portable projects include their images. Older JSON-only projects may need their source relinked after cleanup.") },
+        confirmButton = { TextButton(onClick = { confirmCleanup = false; viewModel.removeUnusedSourceCopies() }) { Text("REMOVE UNUSED") } },
+        dismissButton = { TextButton(onClick = { confirmCleanup = false }) { Text("CANCEL") } })
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         BlockTitle("Inspect")
         PartitionButton(if (state.fullDetail) "RETURN TO FIT PREVIEW" else "LOAD FULL-RESOLUTION DETAIL", enabled = !state.operationInProgress) {
@@ -330,6 +337,7 @@ internal fun CanvasPanel(state: EditorUiState, viewModel: EditorViewModel) {
             enabled = state.sourceBitmap != null,
             active = state.showSource,
         ) { viewModel.setShowSource(!state.showSource) }
+        PartitionButton("REMOVE UNUSED SOURCE COPIES", enabled = !state.operationInProgress) { confirmCleanup = true }
         PartitionButton("RUN SELF-CHECK", onClick = viewModel::runSelfCheck)
     }
 }

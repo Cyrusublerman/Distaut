@@ -10,6 +10,8 @@ import com.cyrusublerman.distaut.effects.normalise
 import com.cyrusublerman.distaut.model.*
 import com.cyrusublerman.distaut.projects.ProjectStore
 import com.cyrusublerman.distaut.projects.SourceAssetLoader
+import com.cyrusublerman.distaut.projects.SourceStorage
+import java.io.File
 import com.cyrusublerman.distaut.recipes.RecipeMapper
 import com.cyrusublerman.distaut.render.*
 import com.cyrusublerman.distaut.render.kotlin.KotlinPipelineRenderer
@@ -60,6 +62,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private var boundSource: SourceAsset? = null
     private var sourcePixels: PixelBuffer? = null
     private var exporting = false
+    private var renderedProject: ProjectState? = null
     private val _uiState = MutableStateFlow(EditorUiState())
     val uiState: StateFlow<EditorUiState> = _uiState.asStateFlow()
 
@@ -69,14 +72,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         interactionEpoch++
         launchSourceOperation("IMPORTING IMAGE") { ticket ->
             val loaded = sourceLoader.importSource(uri)
-            val pixels = withContext(Dispatchers.Default) { loaded.bitmap.toPixelBuffer() }
-            if (ticket != sourceGeneration) return@launchSourceOperation
-            history.endTransaction()
-            history.dispatch(EditorCommand.SetSource(loaded.asset))
-            bind(loaded.asset, loaded.bitmap, pixels)
-            publishHistoryState()
-            _uiState.update { it.copy(fullDetail = false, saved = false) }
-            scheduleAutosave()
+            var retained = false
+            try {
+                val pixels = withContext(Dispatchers.Default) { loaded.bitmap.toPixelBuffer() }
+                if (ticket != sourceGeneration) return@launchSourceOperation
+                history.endTransaction()
+                history.dispatch(EditorCommand.SetSource(loaded.asset))
+                bind(loaded.asset, loaded.bitmap, pixels)
+                retained = true
+                publishHistoryState()
+                _uiState.update { it.copy(fullDetail = false, saved = false) }
+                scheduleAutosave()
+            } finally { if (!retained) loaded.bitmap.recycle() }
         }
     }
 
@@ -120,8 +127,20 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun setExportMaximumDimension(value: Int?) = _uiState.update { it.copy(exportMaximumDimension = value) }
     fun clearMessage() = _uiState.update { it.copy(message = null, error = null) }
     fun clearDiagnostics() = DiagnosticsLog.clear()
+    fun removeUnusedSourceCopies() {
+        val protected = history.retainedSources().mapNotNull { Uri.parse(it.uri).path }.toSet()
+        launchOperation("CLEANING SOURCE STORAGE", "UNUSED SOURCE COPIES REMOVED") {
+            // Publish the current checkpoint before discarding data only older checkpoints referenced.
+            autosaveJob?.cancelAndJoin()
+            projectStore.saveAutosave(history.current, ENGINE_VERSION)
+            val bytes = withContext(Dispatchers.IO) {
+                SourceStorage.removeUnused(File(getApplication<Application>().filesDir, "sources"), protected)
+            }
+            DiagnosticsLog.info("storage", "Reclaimed $bytes bytes; current/undo/redo sources retained")
+        }
+    }
     fun setFullDetail(full: Boolean) {
-        if (full == _uiState.value.fullDetail || exporting) return
+        if (_uiState.value.operationInProgress || (full == _uiState.value.fullDetail && boundSource == history.current.source)) return
         _uiState.update { it.copy(fullDetail = full) }
         reloadSource()
     }
@@ -135,7 +154,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
     private fun afterHistoryChange() {
         publishHistoryState()
-        _uiState.update { it.copy(saved = false) }
+        _uiState.update { it.copy(saved = false, message = null) }
         if (history.current.source != boundSource) reloadSource() else scheduleRender()
         scheduleAutosave()
     }
@@ -278,8 +297,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             if (full) _uiState.update { it.copy(fullDetail = false) }
             throw error
         }
-        val pixels = withContext(Dispatchers.Default) { bitmap.toPixelBuffer() }
-        if (ticket == sourceGeneration && history.current.source == asset) bind(asset, bitmap, pixels)
+        var retained = false
+        try {
+            val pixels = withContext(Dispatchers.Default) { bitmap.toPixelBuffer() }
+            if (ticket == sourceGeneration && history.current.source == asset) {
+                bind(asset, bitmap, pixels)
+                retained = true
+            }
+        } finally { if (!retained) bitmap.recycle() }
     }
     private fun bind(asset: SourceAsset, bitmap: Bitmap, pixels: PixelBuffer) {
         boundSource = asset
@@ -289,6 +314,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private fun clearBinding() {
         boundSource = null
         sourcePixels = null
+        renderedProject = null
         _uiState.update { it.copy(sourceBitmap = null, renderedBitmap = null, stalePreview = false, lastRenderDurationMillis = null) }
     }
     private fun dispatch(command: EditorCommand, gesture: Boolean = false) {
@@ -298,7 +324,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         history.dispatch(command)
         if (previous == history.current) return
         publishHistoryState()
-        _uiState.update { it.copy(saved = false) }
+        _uiState.update { it.copy(saved = false, message = null) }
         scheduleRender(if (gesture) 40L else 0L)
         scheduleAutosave()
     }
@@ -329,6 +355,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
     private fun scheduleRender(debounceMillis: Long = 0) {
         val project = history.current
+        if (renderedProject == project && !_uiState.value.stalePreview && !exporting) return
         val asset = project.source
         val pixels = sourcePixels
         val ticket = previewGeneration.incrementAndGet()
@@ -352,6 +379,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 ensureActive()
                 // Publication happens on Main, after conversion and after the last identity check.
                 if (ticket == previewGeneration.get() && boundSource == asset && history.current == project) {
+                    renderedProject = project
                     _uiState.update { it.copy(renderedBitmap = bitmap, rendering = false, stalePreview = false,
                         lastRenderDurationMillis = (System.nanoTime() - started) / 1_000_000.0) }
                 }

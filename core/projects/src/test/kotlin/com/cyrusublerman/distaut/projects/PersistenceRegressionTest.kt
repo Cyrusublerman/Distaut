@@ -76,6 +76,18 @@ class PersistenceRegressionTest {
         val rows=java.util.zip.InflaterInputStream(ByteArrayInputStream(compressed.toByteArray())).readBytes()
         assertContentEquals(byteArrayOf(0)+image.rgba,rows)
     }
+    @Test fun cleanupKeepsHistoryAssetsAndIgnoresOutsidePaths() {
+        val directory=Files.createTempDirectory("distaut-storage").toFile()
+        val outside=Files.createTempFile("distaut-outside", ".asset").toFile().apply { writeText("outside") }
+        try {
+            val keep=java.io.File(directory,"keep").apply { writeText("keep") }
+            java.io.File(directory,"unused").writeText("unused")
+            Files.createSymbolicLink(java.io.File(directory,"outside-link").toPath(), outside.toPath())
+            assertEquals(6L,SourceStorage.removeUnused(directory,setOf(keep.path)))
+            assertEquals("keep",keep.readText())
+            assertEquals("outside",outside.readText())
+        } finally { directory.deleteRecursively(); outside.delete() }
+    }
     @Test fun allExifTransformsHaveExpectedCornerDirections() {
         val expected=listOf(1f to 2f,-1f to 2f,-1f to -2f,1f to -2f,2f to 1f,-2f to 1f,-2f to -1f,2f to -1f)
         for(orientation in 1..8) {

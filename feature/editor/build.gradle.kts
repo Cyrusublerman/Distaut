@@ -21,6 +21,7 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("androidx.test:core:1.6.1")
+    testImplementation(libs.androidx.exifinterface)
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     implementation(project(":core:model"))
     implementation(project(":core:effects"))

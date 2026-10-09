@@ -18,6 +18,8 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
@@ -173,15 +175,8 @@ class SourceAssetLoader(
 
             if (destination.isFile) {
                 temporary.delete()
-            } else if (!temporary.renameTo(destination)) {
-                FileInputStream(temporary).use { source ->
-                    FileOutputStream(destination).use { target ->
-                        source.copyTo(target)
-                        target.flush()
-                        target.fd.sync()
-                    }
-                }
-                temporary.delete()
+            } else {
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
             }
 
             return RetainedSource(
@@ -304,7 +299,7 @@ class SourceAssetLoader(
         val scale = minOf(1.0, maximumDimension.toDouble() / maxOf(width, height),
             sqrt(pixelBudget.toDouble() / (width.toLong() * height)))
         var sample = 1
-        while (1.0 / sample > scale && sample < 1 shl 29) {
+        while (1.0 / sample > scale && sample < (1 shl 29)) {
             sample *= 2
         }
         return sample

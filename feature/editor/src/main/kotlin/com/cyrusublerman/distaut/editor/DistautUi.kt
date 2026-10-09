@@ -227,7 +227,7 @@ internal fun Viewport(state: EditorUiState, modifier: Modifier, viewModel: Edito
     var wipe by remember { mutableFloatStateOf(.5f) }
     Column(modifier.clipToBounds().background(UiBackground)) {
         Row(Modifier.fillMaxWidth().height(ToolbarHeight)) {
-            TextButton(onClick = { zoom = 1f; pan = Offset.Zero; viewModel.setFullDetail(false) }) { Text("FIT") }
+            TextButton(onClick = { zoom = 1f; pan = Offset.Zero; viewModel.setFullDetail(false) }, enabled = !state.operationInProgress) { Text("FIT") }
             TextButton(onClick = { zoom = 1f; pan = Offset.Zero; viewModel.setFullDetail(true) }, enabled = !state.operationInProgress) { Text("100%") }
             TextButton(onClick = { viewModel.setCompare(!state.compare) }) { Text(if (state.compare) "CLOSE A/B" else "A/B") }
         }
