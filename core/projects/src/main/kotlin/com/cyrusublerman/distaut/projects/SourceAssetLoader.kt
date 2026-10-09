@@ -22,6 +22,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CancellationException
+import kotlin.math.sqrt
 
 data class LoadedSource(val asset: SourceAsset, val bitmap: Bitmap)
 
@@ -190,6 +192,7 @@ class SourceAssetLoader(
             )
         } catch (error: Throwable) {
             temporary.delete()
+            if (error is CancellationException) throw error
             throw IOException("Unable to retain selected image", error)
         }
     }
@@ -294,11 +297,14 @@ class SourceAssetLoader(
     ): Int {
         if (maximumDimension == null) return 1
         require(maximumDimension > 0)
+        val runtime = Runtime.getRuntime()
+        val available = (runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory())).coerceAtLeast(0L)
+        // Seven RGBA-sized allocations cover decode/orientation, source, intermediates and display.
+        val pixelBudget = (available * 3 / 4 / 28).coerceAtLeast(1L)
+        val scale = minOf(1.0, maximumDimension.toDouble() / maxOf(width, height),
+            sqrt(pixelBudget.toDouble() / (width.toLong() * height)))
         var sample = 1
-        while (
-            maxOf(width / sample, height / sample) > maximumDimension &&
-            sample < 128
-        ) {
+        while (1.0 / sample > scale && sample < 1 shl 29) {
             sample *= 2
         }
         return sample

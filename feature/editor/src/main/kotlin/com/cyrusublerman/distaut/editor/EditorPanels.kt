@@ -138,11 +138,12 @@ private fun EffectNode(
     var menu by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().border(BorderWidth, UiBorder, RectangleShape)) {
         BoxWithConstraints(Modifier.fillMaxWidth().height(NodeHeight)) {
+            val labelWidth = (maxWidth - NodeHeight * 3).coerceAtLeast(0.dp)
             Row(Modifier.fillMaxSize()) {
                 NodeCell(if (effect.enabled) "✓" else "□", NodeHeight, enabled = effect.isResolved,
                     active = effect.enabled, description = "Toggle ${effect.type}") { viewModel.setEnabled(effect.id, !effect.enabled) }
                 NodeCell(if (!effect.isResolved) "UNRESOLVED ${effect.type}" else definition?.displayName ?: effect.type,
-                    (maxWidth - NodeHeight * 3).coerceAtLeast(0.dp), active = selected, alignStart = true) { viewModel.select(effect.id) }
+                    labelWidth, active = selected, alignStart = true) { viewModel.select(effect.id) }
                 NodeCell("VIEW", NodeHeight, active = state.project.soloEffectId == effect.id,
                     description = "Preview through ${effect.type}; final export is unchanged") {
                     viewModel.setSolo(if (state.project.soloEffectId == effect.id) null else effect.id)

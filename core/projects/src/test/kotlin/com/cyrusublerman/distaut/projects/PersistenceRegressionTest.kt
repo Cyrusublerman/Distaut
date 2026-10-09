@@ -54,10 +54,27 @@ class PersistenceRegressionTest {
         val image=PixelBuffer(2,1,byteArrayOf(-1,0,0,-1,0,-1,0,-128))
         val out=ByteArrayOutputStream()
         PngWriter.write(image,out)
-        val read=javax.imageio.ImageIO.read(ByteArrayInputStream(out.toByteArray()))
-        assertEquals(2,read.width)
-        assertEquals(0xffff0000.toInt(),read.getRGB(0,0))
-        assertEquals(0x8000ff00.toInt(),read.getRGB(1,0))
+        val stream=java.io.DataInputStream(ByteArrayInputStream(out.toByteArray()))
+        val signature=ByteArray(8); stream.readFully(signature)
+        assertContentEquals(byteArrayOf(137.toByte(),80,78,71,13,10,26,10),signature)
+        val compressed=ByteArrayOutputStream()
+        while (true) {
+            val length=stream.readInt()
+            val type=ByteArray(4); stream.readFully(type)
+            val bytes=ByteArray(length); stream.readFully(bytes)
+            val crc=java.util.zip.CRC32().apply { update(type); update(bytes) }
+            assertEquals(crc.value.toInt(),stream.readInt())
+            val name=type.toString(Charsets.US_ASCII)
+            if (name=="IHDR") {
+                val header=java.io.DataInputStream(ByteArrayInputStream(bytes))
+                assertEquals(2,header.readInt()); assertEquals(1,header.readInt())
+                assertEquals(8,header.readUnsignedByte()); assertEquals(6,header.readUnsignedByte())
+            }
+            if (name=="IDAT") compressed.write(bytes)
+            if (name=="IEND") break
+        }
+        val rows=java.util.zip.InflaterInputStream(ByteArrayInputStream(compressed.toByteArray())).readBytes()
+        assertContentEquals(byteArrayOf(0)+image.rgba,rows)
     }
     @Test fun allExifTransformsHaveExpectedCornerDirections() {
         val expected=listOf(1f to 2f,-1f to 2f,-1f to -2f,1f to -2f,2f to 1f,-2f to 1f,-2f to -1f,2f to -1f)
