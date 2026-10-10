@@ -5,7 +5,7 @@ import com.cyrusublerman.distaut.model.ParameterValue
 import com.cyrusublerman.distaut.model.ProjectState
 
 data class RecipeV2(
-    val schemaVersion: Int = 2,
+    val schemaVersion: Int = 3,
     val engineVersion: String,
     val sourceChecksum: String?,
     val sourceWidth: Int?,
@@ -14,7 +14,7 @@ data class RecipeV2(
     val effects: List<EffectInstance>,
 ) {
     init {
-        require(schemaVersion == 2)
+        require(schemaVersion in 2..3)
         require(engineVersion.isNotBlank())
     }
 }
@@ -59,7 +59,7 @@ object RecipeCodec {
     fun decodeAny(text: String, supportedEffectTypes: Set<String>): RecipeImportResult {
         val root = JsonCodec.parse(text).asObjectOrNull() ?: error("Recipe root must be a JSON object")
         return when {
-            root["schemaVersion"].asNumberOrNull()?.asIntExact() == 2 -> RecipeImportResult(decode(text, supportedEffectTypes))
+            root["schemaVersion"].asNumberOrNull()?.asIntExact()?.let { it in 2..3 } == true -> RecipeImportResult(decode(text, supportedEffectTypes))
             root["version"].asNumberOrNull()?.asIntExact() == 1 -> SiteBoyRecipeV1Importer.import(text)
             else -> error("Unrecognised recipe schema")
         }
@@ -68,7 +68,7 @@ object RecipeCodec {
     fun decode(text: String, supportedEffectTypes: Set<String>): RecipeV2 {
         val root = JsonCodec.parse(text).asObjectOrNull() ?: error("Recipe root must be a JSON object")
         val schema = root["schemaVersion"].asNumberOrNull()?.asIntExact() ?: error("Recipe schemaVersion is required")
-        require(schema == 2)
+        require(schema in 2..3)
         val source = root["source"].asObjectOrNull()
         val effects = root["effects"].asArrayOrNull()?.values
             ?.mapIndexed { index, node -> EffectJsonCodec.decode(node, index, supportedEffectTypes) }
@@ -87,22 +87,16 @@ object RecipeCodec {
 
 object EffectJsonCodec {
     fun encode(effect: EffectInstance): JsonValue {
-        effect.opaquePayload?.let { payload ->
-            return runCatching { JsonCodec.parse(payload) }.getOrElse {
-                JsonValue.Object(
-                    "id" to JsonValue.StringValue(effect.id),
-                    "type" to JsonValue.StringValue(effect.type),
-                    "enabled" to JsonValue.BooleanValue(false),
-                    "unresolvedPayload" to JsonValue.StringValue(payload),
-                )
-            }
-        }
         return JsonValue.Object(
             "id" to JsonValue.StringValue(effect.id),
             "type" to JsonValue.StringValue(effect.type),
             "enabled" to JsonValue.BooleanValue(effect.enabled),
             "opacity" to JsonValue.NumberValue(effect.opacity.toString()),
             "blendMode" to JsonValue.StringValue(effect.blendMode),
+            "algorithmVersion" to effect.algorithmVersion.jsonStringOrNull(),
+            "compositionVersion" to JsonValue.NumberValue(effect.compositionVersion.toString()),
+            "resolution" to JsonValue.StringValue(if (effect.isResolved) "resolved" else "unresolved"),
+            "opaquePayload" to effect.opaquePayload.jsonStringOrNull(),
             "parameters" to JsonValue.Object(LinkedHashMap(effect.parameters.mapValues { encodeParameter(it.value) })),
         )
     }
@@ -118,11 +112,21 @@ object EffectJsonCodec {
         val enabled = objectNode["enabled"].asBooleanOrNull() ?: true
         val opacity = objectNode["opacity"].asNumberOrNull()?.asDouble()?.coerceIn(0.0, 1.0) ?: 1.0
         val blendMode = objectNode["blendMode"].asStringOrNull() ?: "normal"
-        if (type !in supportedEffectTypes) {
-            return EffectInstance(id, type, enabled = false, opacity = opacity, blendMode = blendMode, opaquePayload = JsonCodec.stringify(objectNode))
+        val algorithm = objectNode["algorithmVersion"].asStringOrNull()
+        val composition = objectNode["compositionVersion"].asNumberOrNull()?.asIntExact() ?: 1
+        val payload = objectNode["opaquePayload"].asStringOrNull()
+            ?: objectNode["unresolvedPayload"].asStringOrNull()
+        val unresolved = payload != null || objectNode["resolution"].asStringOrNull() == "unresolved"
+            || type !in supportedEffectTypes
+            || (objectNode["params"] != null && objectNode["parameters"] == null)
+        if (unresolved) {
+            return EffectInstance(id, type, enabled = false, opacity = opacity, blendMode = blendMode,
+                opaquePayload = payload ?: JsonCodec.stringify(objectNode),
+                algorithmVersion = algorithm, compositionVersion = composition)
         }
         val parameters = objectNode["parameters"].asObjectOrNull()?.values?.mapValues { decodeParameter(it.value) }.orEmpty()
-        return EffectInstance(id, type, enabled, parameters, opacity, blendMode)
+        return EffectInstance(id, type, enabled, parameters, opacity, blendMode,
+            algorithmVersion = algorithm, compositionVersion = composition)
     }
 
     private fun encodeParameter(value: ParameterValue): JsonValue = when (value) {

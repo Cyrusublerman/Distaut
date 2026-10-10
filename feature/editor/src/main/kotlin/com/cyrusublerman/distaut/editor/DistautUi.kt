@@ -1,6 +1,24 @@
 package com.cyrusublerman.distaut.editor
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.material3.Slider
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -35,10 +53,10 @@ internal val UiBorder = Color(0xFF171717)
 internal val UiInverseText = Color(0xFFF5F2EA)
 
 internal val F = 14.dp
-internal val ToolbarHeight = 3 * F
+internal val ToolbarHeight = 48.dp
 internal val StatusHeight = 2 * F
 internal val SidebarWidth = 30 * F
-internal val NodeHeight = 3 * F
+internal val NodeHeight = 48.dp
 internal val BorderWidth = 1.dp
 
 @androidx.compose.runtime.Composable
@@ -87,18 +105,15 @@ internal fun StatusStrip(
         state.rendering -> "RENDERING PREVIEW"
         state.message != null -> state.message
         else -> {
-            val render = state.lastRenderDurationMillis
-                ?.let { " · ${"%.1f".format(it)} MS" }
-                .orEmpty()
-            "READY · REV ${state.project.revision} · " +
-                "${state.project.effects.size} NODES$render · LOG $diagnosticCount"
+            if (state.stalePreview) "LAST SUCCESSFUL PREVIEW · CURRENT SETTINGS NOT RENDERED"
+            else if (state.saved) "READY · PROJECT SAVED" else "READY · UNSAVED CHANGES"
         }
     }
     val inverted = state.error != null
     Box(
         Modifier
             .fillMaxWidth()
-            .height(StatusHeight)
+            .heightIn(min = StatusHeight)
             .background(if (inverted) UiText else UiBackground)
             .border(BorderWidth, UiBorder, RectangleShape)
             .clickable(onClick = clear)
@@ -106,10 +121,10 @@ internal fun StatusStrip(
         contentAlignment = Alignment.CenterStart,
     ) {
         Text(
-            text.uppercase(),
+            text,
             color = if (inverted) UiInverseText else UiText,
-            fontSize = 10.sp,
-            maxLines = 1,
+            fontSize = 12.sp,
+            maxLines = 3,
         )
     }
 }
@@ -205,70 +220,63 @@ internal fun KeyValue(label: String, value: String) {
     }
 }
 
-@androidx.compose.runtime.Composable
-internal fun Viewport(state: EditorUiState, modifier: Modifier) {
-    BoxWithConstraints(
-        modifier
-            .background(UiBackground)
-            .border(BorderWidth, UiBorder, RectangleShape)
-    ) {
-        val imageHeight = (maxHeight - StatusHeight).coerceAtLeast(8 * F)
-        Column(Modifier.fillMaxSize()) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(imageHeight)
-                    .background(UiMuted),
-                contentAlignment = Alignment.Center,
-            ) {
-                val bitmap = if (state.showSource) state.sourceBitmap
-                else state.renderedBitmap
-                if (bitmap == null) {
-                    Text(
-                        "NO SOURCE\nSELECT AN IMAGE FROM THE TOP BAR",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                } else {
-                    Image(
-                        bitmap.asImageBitmap(),
-                        if (state.showSource) "Source image" else "Rendered output",
-                        Modifier.fillMaxSize().padding(F),
-                        contentScale = ContentScale.Fit,
-                    )
-                }
-                if (state.rendering || state.operationInProgress) {
-                    CircularProgressIndicator(
-                        Modifier.width(3 * F),
-                        color = UiText,
-                    )
+@Composable
+internal fun Viewport(state: EditorUiState, modifier: Modifier, viewModel: EditorViewModel) {
+    var zoom by remember(state.sourceBitmap, state.fullDetail) { mutableFloatStateOf(1f) }
+    var pan by remember(state.sourceBitmap) { mutableStateOf(Offset.Zero) }
+    var wipe by remember { mutableFloatStateOf(.5f) }
+    Column(modifier.clipToBounds().background(UiBackground)) {
+        Row(Modifier.fillMaxWidth().height(ToolbarHeight)) {
+            TextButton(onClick = { zoom = 1f; pan = Offset.Zero; viewModel.setFullDetail(false) }, enabled = !state.operationInProgress) { Text("FIT") }
+            TextButton(onClick = { zoom = 1f; pan = Offset.Zero; viewModel.setFullDetail(true) }, enabled = !state.operationInProgress) { Text("100%") }
+            TextButton(onClick = { viewModel.setCompare(!state.compare) }) { Text(if (state.compare) "CLOSE A/B" else "A/B") }
+        }
+        BoxWithConstraints(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
+            val bitmap = if (state.showSource) state.sourceBitmap else state.renderedBitmap
+            val density = LocalDensity.current
+            val widthPx = with(density) { maxWidth.toPx() }
+            val heightPx = with(density) { maxHeight.toPx() }
+            val fit = if (bitmap != null) minOf(widthPx / bitmap.width, heightPx / bitmap.height).coerceAtLeast(.0001f) else 1f
+            val nativeScale = if (state.fullDetail) 1f / fit else 1f
+            val displayScale = zoom * nativeScale
+            Canvas(Modifier.fillMaxSize()) {
+                val cell = 16.dp.toPx()
+                for (y in 0..(size.height / cell).toInt()) for (x in 0..(size.width / cell).toInt()) {
+                    drawRect(if ((x + y) % 2 == 0) UiBackground else UiMuted,
+                        topLeft = Offset(x * cell, y * cell), size = Size(cell, cell))
                 }
             }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(StatusHeight)
-                    .background(UiBackground)
-                    .border(BorderWidth, UiBorder, RectangleShape)
-                    .padding(horizontal = F),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                val source = state.project.source
-                Text(
-                    buildString {
-                        append(if (state.showSource) "SOURCE" else "OUTPUT")
-                        append(" · ")
-                        append(source?.displayName ?: "NO SOURCE")
-                        source?.let { append(" · ${it.width} × ${it.height}") }
-                        state.lastRenderDurationMillis?.let {
-                            append(" · ${"%.1f".format(it)} MS")
-                        }
-                    },
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                )
+            Box(Modifier.fillMaxSize().pointerInput(bitmap, nativeScale) {
+                detectTransformGestures { _, drag, scale, _ ->
+                    zoom = (zoom * scale).coerceIn(.1f, 32f)
+                    val limitX = widthPx * maxOf(1f, zoom * nativeScale)
+                    val limitY = heightPx * maxOf(1f, zoom * nativeScale)
+                    pan = Offset((pan.x + drag.x).coerceIn(-limitX, limitX), (pan.y + drag.y).coerceIn(-limitY, limitY))
+                }
+            }, contentAlignment = Alignment.Center) {
+                if (bitmap == null) Text(if (state.project.source == null) "OPEN AN IMAGE" else "SOURCE UNAVAILABLE · USE TOOLS TO RELINK", Modifier.padding(F))
+                else {
+                    Image(bitmap.asImageBitmap(), "Image output", Modifier.fillMaxSize().graphicsLayer {
+                        scaleX = displayScale; scaleY = displayScale; translationX = pan.x; translationY = pan.y
+                    }, contentScale = ContentScale.Fit)
+                    if (state.compare && state.sourceBitmap != null) {
+                        Image(state.sourceBitmap.asImageBitmap(), "Original image on the left", Modifier.fillMaxSize()
+                            .drawWithContent { clipRect(right = size.width * wipe) { this@drawWithContent.drawContent() } }
+                            .graphicsLayer { scaleX = displayScale; scaleY = displayScale; translationX = pan.x; translationY = pan.y },
+                            contentScale = ContentScale.Fit)
+                    }
+                }
+                if (state.rendering || state.operationInProgress) CircularProgressIndicator(Modifier.width(3 * F), color = UiText)
             }
         }
+        if (state.compare) Slider(wipe, onValueChange = { wipe = it }, Modifier.fillMaxWidth().height(48.dp))
+        Text(
+            when {
+                state.stalePreview -> "LAST SUCCESSFUL RESULT"
+                state.fullDetail -> "FULL RESOLUTION · PINCH TO ZOOM"
+                else -> "FIT PREVIEW · SPATIAL EFFECTS APPROXIMATED"
+            }, Modifier.fillMaxWidth().padding(horizontal = F), fontSize = 11.sp, maxLines = 2,
+        )
     }
 }
 

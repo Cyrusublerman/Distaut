@@ -17,6 +17,7 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:render-api"))
     implementation(project(":core:effects"))
     implementation(project(":core:recipes"))
     implementation(libs.androidx.exifinterface)

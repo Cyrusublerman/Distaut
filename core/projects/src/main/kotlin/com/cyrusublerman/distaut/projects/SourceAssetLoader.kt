@@ -5,6 +5,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.ImageDecoder
+import android.graphics.Matrix
+import androidx.exifinterface.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.provider.OpenableColumns
@@ -16,8 +18,14 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.security.MessageDigest
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CancellationException
+import kotlin.math.sqrt
 
 data class LoadedSource(val asset: SourceAsset, val bitmap: Bitmap)
 
@@ -42,7 +50,8 @@ class SourceAssetLoader(
                 null,
             )
 
-            val retained = retainSource(uri, metadata)
+            val coroutine = currentCoroutineContext()
+            val retained = retainSource(uri, metadata) { coroutine.ensureActive() }
             diagnostic(
                 "Retained source: ${retained.file.name} bytes=${retained.sizeBytes} " +
                     "sha256=${retained.checksum.take(12)}…",
@@ -96,6 +105,7 @@ class SourceAssetLoader(
     suspend fun loadFull(asset: SourceAsset): Bitmap = withContext(Dispatchers.IO) {
         val uri = Uri.parse(asset.uri)
         diagnostic("Loading full source: ${asset.width}x${asset.height}", null)
+        checkFullResolutionBudget(asset.width, asset.height)
         decode(uri, null).bitmap
     }
 
@@ -131,7 +141,7 @@ class SourceAssetLoader(
         val sourceHeight: Int,
     )
 
-    private fun retainSource(uri: Uri, metadata: Metadata): RetainedSource {
+    private fun retainSource(uri: Uri, metadata: Metadata, checkCancelled: () -> Unit): RetainedSource {
         val directory = File(context.filesDir, "sources").apply {
             if (!exists() && !mkdirs()) throw IOException("Unable to create source directory")
         }
@@ -144,6 +154,7 @@ class SourceAssetLoader(
                 FileOutputStream(temporary).use { output ->
                     val buffer = ByteArray(64 * 1024)
                     while (true) {
+                        checkCancelled()
                         val read = input.read(buffer)
                         if (read < 0) break
                         digest.update(buffer, 0, read)
@@ -164,15 +175,8 @@ class SourceAssetLoader(
 
             if (destination.isFile) {
                 temporary.delete()
-            } else if (!temporary.renameTo(destination)) {
-                FileInputStream(temporary).use { source ->
-                    FileOutputStream(destination).use { target ->
-                        source.copyTo(target)
-                        target.flush()
-                        target.fd.sync()
-                    }
-                }
-                temporary.delete()
+            } else {
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
             }
 
             return RetainedSource(
@@ -183,6 +187,7 @@ class SourceAssetLoader(
             )
         } catch (error: Throwable) {
             temporary.delete()
+            if (error is CancellationException) throw error
             throw IOException("Unable to retain selected image", error)
         }
     }
@@ -205,6 +210,7 @@ class SourceAssetLoader(
             runCatching {
                 return decodeWithImageDecoder(uri, maximumDimension)
             }.onFailure {
+                if (it is IllegalArgumentException) throw it
                 diagnostic(
                     "ImageDecoder failed; falling back to BitmapFactory: ${it.message}",
                     it,
@@ -229,6 +235,7 @@ class SourceAssetLoader(
         val bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
             sourceWidth = info.size.width
             sourceHeight = info.size.height
+            if (maximumDimension == null) checkFullResolutionBudget(sourceWidth, sourceHeight)
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
             decoder.isMutableRequired = false
             decoder.setOnPartialImageListener { false }
@@ -247,6 +254,7 @@ class SourceAssetLoader(
         maximumDimension: Int?,
     ): DecodedImage {
         val bounds = decodeBounds(uri)
+        if (maximumDimension == null) checkFullResolutionBudget(bounds.first, bounds.second)
         val options = BitmapFactory.Options().apply {
             inSampleSize = calculateSampleSize(bounds.first, bounds.second, maximumDimension)
             inPreferredConfig = Bitmap.Config.ARGB_8888
@@ -257,7 +265,15 @@ class SourceAssetLoader(
             "BitmapFactory could not decode the selected image. " +
                 "The format may not be supported on Android ${Build.VERSION.RELEASE}.",
         )
-        return DecodedImage(bitmap, bounds.first, bounds.second)
+        val orientation = runCatching { openStream(uri).use {
+            ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+        } }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+        val values = ExifOrientation.matrix(orientation)
+        val matrix = Matrix().apply { setValues(values) }
+        val oriented = if (orientation in 2..8) Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true) else bitmap
+        if (oriented !== bitmap) bitmap.recycle()
+        val swap = orientation in 5..8
+        return DecodedImage(oriented, if (swap) bounds.second else bounds.first, if (swap) bounds.first else bounds.second)
     }
 
     private fun decodeBounds(uri: Uri): Pair<Int, Int> {
@@ -276,11 +292,14 @@ class SourceAssetLoader(
     ): Int {
         if (maximumDimension == null) return 1
         require(maximumDimension > 0)
+        val runtime = Runtime.getRuntime()
+        val available = (runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory())).coerceAtLeast(0L)
+        // Seven RGBA-sized allocations cover decode/orientation, source, intermediates and display.
+        val pixelBudget = (available * 3 / 4 / 28).coerceAtLeast(1L)
+        val scale = minOf(1.0, maximumDimension.toDouble() / maxOf(width, height),
+            sqrt(pixelBudget.toDouble() / (width.toLong() * height)))
         var sample = 1
-        while (
-            maxOf(width / sample, height / sample) > maximumDimension &&
-            sample < 128
-        ) {
+        while (1.0 / sample > scale && sample < (1 shl 29)) {
             sample *= 2
         }
         return sample
@@ -331,4 +350,15 @@ class SourceAssetLoader(
 
     private fun elapsedMillis(startedNanos: Long): Long =
         (System.nanoTime() - startedNanos) / 1_000_000L
+}
+
+/** Conservative bound for full-resolution bitmap, conversion and renderer scratch. */
+fun checkFullResolutionBudget(width: Int, height: Int) {
+    val runtime = Runtime.getRuntime()
+    val used = runtime.totalMemory() - runtime.freeMemory()
+    val available = (runtime.maxMemory() - used).coerceAtLeast(0L)
+    val required = width.toLong() * height * 4 * 7
+    require(required <= available * 3 / 4) {
+        "Full-resolution processing needs about ${required / 1048576} MiB; choose a smaller export size"
+    }
 }

@@ -36,3 +36,26 @@ class ProjectReducerTest {
         assertEquals(replacement, history.current)
     }
 }
+
+class HistoryRegressionTest {
+    @kotlin.test.Test fun oneGestureIsOneUndoStepAndKeepsSourceIdentity() {
+        val a=SourceAsset("file:/a",width=2,height=2)
+        val b=SourceAsset("file:/b",width=2,height=2)
+        val history=ProjectHistory(ProjectState(source=a,effects=listOf(EffectInstance("e","invert"))))
+        history.dispatch(EditorCommand.SetSource(b))
+        history.beginTransaction()
+        repeat(100) { history.dispatch(EditorCommand.SetOpacity("e",it/100.0)) }
+        history.endTransaction()
+        kotlin.test.assertEquals(1.0,history.undo().effects.single().opacity)
+        kotlin.test.assertEquals(a,history.undo().source)
+        kotlin.test.assertEquals(b,history.redo().source)
+        kotlin.test.assertEquals(setOf(a,b),history.retainedSources())
+    }
+    @kotlin.test.Test fun previewTargetDoesNotChangeExportEffects() {
+        val a=EffectInstance("a","invert")
+        val b=EffectInstance("b","greyscale")
+        val state=ProjectState(effects=listOf(a,b),soloEffectId="a")
+        kotlin.test.assertEquals(listOf(a),state.activeEffects())
+        kotlin.test.assertEquals(listOf(a,b),state.finalEffects())
+    }
+}
