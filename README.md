@@ -25,11 +25,14 @@ The SiteBoy DISTORT implementation remains source lineage and behaviour evidence
 ## Toolchain
 
 - JDK 17
-- Gradle 8.9 through the committed Gradle wrapper
-- Android Gradle Plugin 8.7.3
-- Kotlin 2.0.21
+- Gradle 9.7.1 through the committed, checksum-verified Gradle wrapper
+- Android Gradle Plugin 9.3.3 with built-in Kotlin for Android modules
+- Kotlin and Compose compiler plugin 2.4.21
+- Android SDK Build Tools 36.0.0
 - compile SDK 35
 - minimum SDK 26
+
+The Gradle 9.7 and AGP 9.3 release lines follow [Kotlin's compatibility guidance](https://kotlinlang.org/docs/gradle-configure-project.html), with current patch fixes applied. AGP 9.3.3 includes the JDK 17 lint and dexer fixes documented in [its release notes](https://developer.android.com/build/releases/agp-9-3-0-release-notes). Android modules use AGP's built-in Kotlin; JVM modules and the Compose compiler share the Kotlin version in the version catalogue.
 
 ## Build
 

@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: 2026-10-09. Branch: `fix/editor-correctness-and-persistence`.
+Updated: 2026-10-11. Branch: `fix/editor-correctness-and-persistence`.
 
 ## Corrections implemented
 
@@ -18,6 +18,7 @@ Updated: 2026-10-09. Branch: `fix/editor-correctness-and-persistence`.
 - Touch controls have larger layout targets; short-window layout no longer sums incompatible minimum heights. Diagnostics and recipe file actions live under Tools.
 - Explicit storage cleanup preserves current/undo/redo sources and warns that old JSON-only projects may need relinking. No automatic asset garbage collection occurs.
 - CI no longer requests Android's removed `tools` SDK package.
+- CI actions use Node 24 and pinned release commits on Ubuntu 24.04. The build uses Gradle 9.7.1, AGP 9.3.3, Kotlin/Compose compiler 2.4.21 and SDK Build Tools 36.0.0. Android modules have migrated to built-in Kotlin; wrapper scripts and the wrapper JAR are updated, and the distribution SHA-256 is pinned.
 
 ## Validation
 
