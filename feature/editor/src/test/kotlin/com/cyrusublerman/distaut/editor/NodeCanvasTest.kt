@@ -77,15 +77,15 @@ class NodeCanvasTest {
     }
     @Test fun tabletShowsBranchesAndSupportsTouchWiringDraggingAndUndo() {
         compose.onNodeWithContentDescription("Move or select SOURCE").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Connect input mask of MIX").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Connect input mask of MIX IMAGES").assertIsDisplayed()
         capture("tablet-split")
         compose.onNodeWithText("EXPAND").performClick()
         compose.waitForIdle()
         capture("tablet-expanded")
         val original = vm.uiState.value.project
         val mix = original.effects.first { it.type == "mix" }
-        compose.onNodeWithContentDescription("Connect output of SOURCE").performClick()
-        compose.onNodeWithContentDescription("Connect input b of MIX").performClick()
+        compose.onNodeWithContentDescription("Connect output of SOURCE").performTouchInput { click() }
+        compose.onNodeWithContentDescription("Connect input b of MIX IMAGES").performTouchInput { click() }
         settle()
         assertEquals(SOURCE_NODE_ID, vm.uiState.value.project.graph!!.upstream(mix.id, "b"))
         compose.runOnIdle { vm.undo() }; settle()
