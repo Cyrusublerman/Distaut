@@ -29,7 +29,7 @@ The SiteBoy DISTORT implementation remains source lineage and behaviour evidence
 
 Open an image, then use **EXAMPLE** to load a real branch-and-merge graph: the source feeds blur, posterise and an edge mask; Mix combines the two image branches through that mask. Undo restores your prior graph.
 
-Use **+ NODE** to add from the selected node. Select SOURCE first to start a parallel branch. Tap an **OUT** row and then a matching input to connect; the inspector also offers explicit input selection and disconnection. Drag headers to move nodes, pan/pinch the background, and use FIT or ARRANGE when needed. F marks the final export and V marks the viewer. On narrower screens INSPECT switches between the graph and parameter controls.
+Use **+ NODE** to add from the selected node. Select SOURCE first to start a parallel branch. Tap an **OUT** row and then a matching input to connect; the inspector also offers explicit input selection and disconnection. Drag headers to move nodes, pan/pinch the background, and use FIT or ARRANGE when needed. EXPAND gives the graph the full workspace; SPLIT VIEW restores the image preview. F marks the final export and V marks the viewer. On narrower screens INSPECT switches between the graph and parameter controls.
 
 The renderer currently uses CPU RGBA8 buffers, one retained source and one designated export output. It is not a GPU, tiled, multi-source or batch editor yet. [Reference assessment](docs/node-editor-references.md) records the direction informed by Arcbrush and the supplied repositories.
 

@@ -39,7 +39,7 @@ Physical tablet responsiveness, stylus behaviour, lifecycle killing by a real OS
 
 ## Explicit limits and subsequent work
 
-The graph is functional but deliberately small: six existing image effects plus four graph utilities, one source, and one final output. Groups, multiple sources, vector fields, batch outputs, general region/tile execution and GPU acceleration remain subsequent work. Cross-request downstream caching is not yet implemented; shared branches are memoised within each render. Canvas layout changes are persisted and currently trigger preview scheduling. See [reference assessment](node-editor-references.md).
+The graph is functional but deliberately small: six existing image effects plus four graph utilities, one source, and one final output. Groups, multiple sources, vector fields, batch outputs, general region/tile execution and GPU acceleration remain subsequent work. Cross-request downstream caching is not yet implemented; shared branches are memoised within each render. Canvas layout changes are persisted without reprocessing pixels. The graph can expand to fill the workspace. See [reference assessment](node-editor-references.md).
 
 Full-resolution images that exceed available memory are rejected with a smaller-export instruction; streaming PNG does not make the image-processing kernels themselves tiled. Downsampled dither/quantisation remains approximate even when coordinate units agree. Use full-resolution inspection where the memory budget permits.
 

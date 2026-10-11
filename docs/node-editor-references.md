@@ -12,7 +12,7 @@ The current implementation delivers that foundation. It does not claim feature o
 
 The [official product page](https://arcbrush.com/) describes a native C++ desktop application with typed pins, downstream re-evaluation, per-node viewing, viewer locking, A/B comparison, portable graphs and CPU/GPU execution. Its broader brush, deformation, batch and colour-management features set a useful long-term product benchmark.
 
-Apply now: visible typed connections, separate viewer/export selection, branch-and-merge examples, fit/arrange and persistent canvas positions. Next: avoid processing on layout edits, cache unchanged branches within a strict memory budget, improve connection feedback, then add searchable nodes, reroutes and groups. Brush authoring and scene-referred float colour require their own document and pixel contracts.
+Apply now: visible typed connections, separate viewer/export selection, branch-and-merge examples, fit/arrange and persistent canvas positions. Layout edits now avoid image processing, and Expand gives touch editing more space. Next: cache unchanged branches within a strict memory budget, improve connection feedback, then add searchable nodes, reroutes and groups. Brush authoring and scene-referred float colour require their own document and pixel contracts.
 
 ## Shadow
 

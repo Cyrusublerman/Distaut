@@ -106,12 +106,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun connect(from: String, to: String, input: String): Boolean = dispatchGraph(EditorCommand.Connect(from, to, input))
     fun disconnect(to: String, input: String) { dispatchGraph(EditorCommand.Disconnect(to, input)) }
     fun positionNode(id: String, position: NodePosition) {
+        interactionEpoch++
         history.endTransaction()
         history.dispatch(EditorCommand.SetNodePosition(id, position))
         publishHistoryState()
         _uiState.update { it.copy(saved = false) }
         scheduleAutosave()
-        scheduleRender()
     }
     fun arrangeNodes() {
         val graph = history.current.processingGraph()
@@ -395,7 +395,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         if (previous == history.current) return
         publishHistoryState()
         _uiState.update { it.copy(saved = false, message = null) }
-        scheduleRender(if (gesture) 40L else 0L)
+        if (!sameRenderInputs(previous, history.current)) scheduleRender(if (gesture) 40L else 0L)
         scheduleAutosave()
     }
     private fun publishHistoryState() {
@@ -427,7 +427,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private fun scheduleRender(debounceMillis: Long = 0) {
         val project = history.current
         val viewer = _uiState.value.viewerNodeId
-        if (renderedProject == project && renderedViewer == viewer && !_uiState.value.stalePreview && !exporting) return
+        if (renderedProject?.let { sameRenderInputs(it, project) } == true && renderedViewer == viewer && !_uiState.value.stalePreview && !exporting) return
         val asset = project.source
         val pixels = sourcePixels
         val ticket = previewGeneration.incrementAndGet()
@@ -451,8 +451,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 ensureActive()
                 // Publication happens on Main, after conversion and after the last identity check.
-                if (ticket == previewGeneration.get() && boundSource == asset && history.current == project && _uiState.value.viewerNodeId == viewer) {
-                    renderedProject = project
+                if (ticket == previewGeneration.get() && boundSource == asset && sameRenderInputs(history.current, project) && _uiState.value.viewerNodeId == viewer) {
+                    renderedProject = history.current
                     renderedViewer = viewer
                     _uiState.update { it.copy(renderedBitmap = bitmap, rendering = false, stalePreview = false,
                         lastRenderDurationMillis = (System.nanoTime() - started) / 1_000_000.0) }
@@ -469,6 +469,9 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
     }
+    private fun sameRenderInputs(a: ProjectState, b: ProjectState): Boolean =
+        a.copy(revision = 0, graph = a.graph?.copy(positions = emptyMap())) ==
+            b.copy(revision = 0, graph = b.graph?.copy(positions = emptyMap()))
     private fun launchOperation(start: String, success: String, block: suspend () -> Unit) {
         if (_uiState.value.operationInProgress) return
         _uiState.update { it.copy(operationInProgress = true, message = start, error = null) }

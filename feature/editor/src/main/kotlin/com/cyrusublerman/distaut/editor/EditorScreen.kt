@@ -207,13 +207,15 @@ private fun Workspace(
     exportDiagnostics: () -> Unit,
     viewModel: EditorViewModel,
 ) {
+    var graphExpanded by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val workspaceWidth = maxWidth
         val workspaceHeight = maxHeight
         if (!debug && mode == SidebarMode.NODES) {
             Column(Modifier.fillMaxSize()) {
-                Viewport(state, Modifier.fillMaxWidth().weight(0.43f), viewModel)
+                if (!graphExpanded) Viewport(state, Modifier.fillMaxWidth().weight(0.43f), viewModel)
                 GraphWorkbench(state, viewModel, Modifier.fillMaxWidth().weight(0.57f),
+                    expanded = graphExpanded, onToggleExpand = { graphExpanded = !graphExpanded },
                     onImageSettings = { setMode(SidebarMode.CANVAS) })
             }
         } else if (workspaceWidth >= 800.dp) {
