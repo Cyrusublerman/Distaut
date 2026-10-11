@@ -4,6 +4,7 @@ import android.app.Application
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
+import android.os.Looper
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
@@ -18,6 +19,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import kotlin.test.*
@@ -51,7 +53,11 @@ class NodeCanvasTest {
     }
     @After fun tearDown() { compose.runOnIdle { store.clear() } }
     private fun settle() {
-        compose.waitUntil(15000) { !vm.uiState.value.operationInProgress && !vm.uiState.value.rendering }
+        // IO/render work resumes through Android's paused main Looper, outside the Compose frame clock.
+        compose.waitUntil(15000) {
+            shadowOf(Looper.getMainLooper()).idle()
+            !vm.uiState.value.operationInProgress && !vm.uiState.value.rendering
+        }
         compose.waitForIdle()
         assertNull(vm.uiState.value.error)
     }

@@ -124,7 +124,7 @@ private fun NodeCanvas(
     fun portColour(id: String) = if (GraphRules.outputType(id, state.project.effects) == PortType.MASK) MaskWire else ImageWire
     BoxWithConstraints(modifier.background(Color(0xFF171A1E)).clipToBounds()) {
         val width = maxWidth.value; val height = maxHeight.value
-        LaunchedEffect(fitRequest, width, height) {
+        LaunchedEffect(fitRequest, width, height, ids) {
             val minX = ids.minOf { position(it).x }; val minY = ids.minOf { position(it).y }
             val maxX = ids.maxOf { position(it).x + NODE_WIDTH }; val maxY = ids.maxOf { position(it).y + nodeHeight(it) }
             zoom = minOf((width - 32) / (maxX - minX), (height - 32) / (maxY - minY)).coerceIn(0.15f, 1.1f)
