@@ -18,6 +18,13 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Text
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -38,6 +45,12 @@ internal enum class SidebarMode {
 fun EditorRoute(viewModel: EditorViewModel = viewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val diagnostics by DiagnosticsLog.entries.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_STOP) viewModel.checkpoint() }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     var mode by rememberSaveable { mutableStateOf(SidebarMode.PIPELINE) }
     var debug by rememberSaveable { mutableStateOf(false) }
 
@@ -48,7 +61,7 @@ fun EditorRoute(viewModel: EditorViewModel = viewModel()) {
         else viewModel.importSource(uri)
     }
     val projectSaver = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json"),
+        ActivityResultContracts.CreateDocument("application/zip"),
     ) { it?.let(viewModel::saveProject) }
     val projectOpener = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument(),
@@ -83,11 +96,11 @@ fun EditorRoute(viewModel: EditorViewModel = viewModel()) {
                 )
             )
         },
-        saveProject = { projectSaver.launch("distaut-project.json") },
+        saveProject = { projectSaver.launch("distaut-project.distaut") },
         openProject = {
-            projectOpener.launch(arrayOf("application/json", "text/plain"))
+            projectOpener.launch(arrayOf("application/zip", "application/octet-stream", "application/json", "text/plain"))
         },
-        saveRecipe = { recipeSaver.launch("distaut-recipe-v2.json") },
+        saveRecipe = { recipeSaver.launch("distaut-recipe-v3.json") },
         openRecipe = {
             recipeOpener.launch(arrayOf("application/json", "text/plain"))
         },
@@ -161,44 +174,26 @@ private fun Toolbar(
     setDebug: (Boolean) -> Unit,
     viewModel: EditorViewModel,
 ) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(ToolbarHeight)
-            .horizontalScroll(rememberScrollState())
-            .border(BorderWidth, UiBorder, RectangleShape),
-    ) {
-        ToolCell(
-            state.project.source?.displayName ?: "NO SOURCE ▾",
-            14 * F,
-            alignStart = true,
-            onClick = pickImage,
-        )
-        ToolCell("OPEN", 5 * F, onClick = openProject)
-        ToolCell("SAVE", 5 * F, onClick = saveProject)
-        ToolCell("UNDO", 5 * F, state.canUndo, onClick = viewModel::undo)
-        ToolCell("REDO", 5 * F, state.canRedo, onClick = viewModel::redo)
-        ToolCell(
-            if (state.showSource) "SOURCE" else "OUTPUT",
-            6 * F,
-            enabled = state.sourceBitmap != null,
-            active = state.showSource,
-        ) { viewModel.setShowSource(!state.showSource) }
-        ToolCell("LOAD RCP", 7 * F, onClick = openRecipe)
-        ToolCell("SAVE RCP", 7 * F, onClick = saveRecipe)
-        ToolCell(
-            "EXPORT PNG",
-            8 * F,
-            enabled = state.project.source != null && !state.operationInProgress,
-            onClick = exportPng,
-        )
-        ToolCell(
-            "DEBUG ${DiagnosticsLog.entries.value.count {
-                it.level == DiagnosticLevel.ERROR
-            }}",
-            7 * F,
-            active = debug,
-        ) { setDebug(!debug) }
+    var toolsOpen by rememberSaveable { mutableStateOf(false) }
+    val idle = !state.operationInProgress
+    Row(Modifier.fillMaxWidth().height(ToolbarHeight).horizontalScroll(rememberScrollState())) {
+        ToolCell(state.project.source?.displayName ?: "OPEN IMAGE", 12 * F, enabled = idle, alignStart = true, onClick = pickImage)
+        ToolCell("OPEN", 5 * F, enabled = idle, onClick = openProject)
+        ToolCell("SAVE", 5 * F, enabled = idle, onClick = saveProject)
+        ToolCell("UNDO", 5 * F, state.canUndo && idle, onClick = viewModel::undo)
+        ToolCell("REDO", 5 * F, state.canRedo && idle, onClick = viewModel::redo)
+        ToolCell(if (state.showSource) "SOURCE" else "OUTPUT", 6 * F,
+            enabled = state.sourceBitmap != null, active = state.showSource) { viewModel.setShowSource(!state.showSource) }
+        ToolCell("EXPORT", 6 * F, enabled = state.project.source != null && idle, onClick = exportPng)
+        Box {
+            ToolCell("TOOLS", 6 * F, onClick = { toolsOpen = true })
+            DropdownMenu(expanded = toolsOpen, onDismissRequest = { toolsOpen = false }) {
+                DropdownMenuItem(text = { Text("Load recipe") }, enabled = idle, onClick = { toolsOpen = false; openRecipe() })
+                DropdownMenuItem(text = { Text("Save recipe") }, enabled = idle, onClick = { toolsOpen = false; saveRecipe() })
+                DropdownMenuItem(text = { Text("Relink / replace source") }, enabled = idle, onClick = { toolsOpen = false; pickImage() })
+                DropdownMenuItem(text = { Text("Diagnostics") }, onClick = { toolsOpen = false; setDebug(!debug) })
+            }
+        }
     }
 }
 
@@ -240,15 +235,16 @@ private fun Workspace(
                 Viewport(
                     state,
                     Modifier.width(viewportWidth).fillMaxHeight(),
+                    viewModel,
                 )
             }
         } else {
-            val canvas = (workspaceHeight * 0.52f).coerceAtLeast(18 * F)
+            val canvas = workspaceHeight * 0.52f
             val sidebarHeight = (
                 workspaceHeight - canvas - BorderWidth
-                ).coerceAtLeast(18 * F)
+                ).coerceAtLeast(0.dp)
             Column(Modifier.fillMaxSize()) {
-                Viewport(state, Modifier.fillMaxWidth().height(canvas))
+                Viewport(state, Modifier.fillMaxWidth().height(canvas), viewModel)
                 Box(
                     Modifier
                         .fillMaxWidth()

@@ -12,7 +12,7 @@ import com.cyrusublerman.distaut.recipes.asObjectOrNull
 import com.cyrusublerman.distaut.recipes.asStringOrNull
 
 data class ProjectDocument(
-    val schemaVersion: Int = 1,
+    val schemaVersion: Int = 2,
     val engineVersion: String,
     val savedAtEpochMillis: Long,
     val project: ProjectState,
@@ -45,7 +45,7 @@ object ProjectCodec {
             ?: error("Project root must be a JSON object")
         val schema = root["schemaVersion"].asNumberOrNull()?.asIntExact()
             ?: error("Project schemaVersion is required")
-        require(schema == 1) { "Unsupported project schema: $schema" }
+        require(schema in 1..2) { "Unsupported project schema: $schema" }
         val projectObject = root["project"].asObjectOrNull()
             ?: error("Project state is required")
         val effects = projectObject["effects"].asArrayOrNull()?.values

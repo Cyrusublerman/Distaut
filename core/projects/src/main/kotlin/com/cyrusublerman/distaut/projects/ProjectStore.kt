@@ -1,7 +1,7 @@
 package com.cyrusublerman.distaut.projects
 
 import android.content.Context
-import android.graphics.Bitmap
+import com.cyrusublerman.distaut.render.PixelBuffer
 import android.net.Uri
 import com.cyrusublerman.distaut.effects.BuiltInEffects
 import com.cyrusublerman.distaut.model.ProjectState
@@ -12,30 +12,58 @@ import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import java.io.BufferedInputStream
+import java.io.FileInputStream
 
 class ProjectStore(private val context: Context) {
     private val autosaveDirectory = File(context.filesDir, "projects")
     private val autosaveFile = File(autosaveDirectory, "autosave.distaut.json")
+    private val autosaveMutex = Mutex()
     private val supportedTypes get() = BuiltInEffects.registry.supportedTypes()
 
     suspend fun saveAutosave(project: ProjectState, engineVersion: String) = withContext(Dispatchers.IO) {
         autosaveDirectory.mkdirs()
         val document = ProjectDocument(engineVersion = engineVersion, savedAtEpochMillis = System.currentTimeMillis(), project = project)
-        writeAtomic(autosaveFile, ProjectCodec.encode(document).toByteArray(Charsets.UTF_8))
+        autosaveMutex.withLock {
+            currentCoroutineContext().ensureActive()
+            AtomicDocument.write(autosaveFile, ProjectCodec.encode(document).toByteArray(Charsets.UTF_8))
+        }
     }
 
     suspend fun loadAutosave(): ProjectDocument? = withContext(Dispatchers.IO) {
-        if (!autosaveFile.isFile) return@withContext null
-        ProjectCodec.decode(autosaveFile.readText(), supportedTypes)
+        autosaveMutex.withLock {
+            if (!autosaveFile.isFile) null else ProjectCodec.decode(autosaveFile.readText(), supportedTypes)
+        }
     }
 
     suspend fun saveProject(uri: Uri, project: ProjectState, engineVersion: String) = withContext(Dispatchers.IO) {
-        writeText(uri, ProjectCodec.encode(ProjectDocument(engineVersion = engineVersion, savedAtEpochMillis = System.currentTimeMillis(), project = project)))
+        val snapshot = ProjectDocument(engineVersion = engineVersion, savedAtEpochMillis = System.currentTimeMillis(), project = project)
+        val coroutine = currentCoroutineContext()
+        val source = project.source?.let { openSource(Uri.parse(it.uri)) }
+        try {
+            val output = context.contentResolver.openOutputStream(uri, "wt") ?: error("Unable to open destination")
+            output.use { PortableProject.write(snapshot, source, it) { coroutine.ensureActive() } }
+        } finally { source?.close() }
     }
 
     suspend fun loadProject(uri: Uri): ProjectDocument = withContext(Dispatchers.IO) {
-        ProjectCodec.decode(readText(uri), supportedTypes)
+        val coroutine = currentCoroutineContext()
+        BufferedInputStream(openSource(uri)).use { stream ->
+            stream.mark(4)
+            val zip = stream.read() == 0x50 && stream.read() == 0x4b
+            stream.reset()
+            if (zip) PortableProject.read(stream, File(context.filesDir, "sources"), supportedTypes) { coroutine.ensureActive() }
+            else ProjectCodec.decode(stream.readBytesLimited(16 * 1024 * 1024).toString(Charsets.UTF_8), supportedTypes)
+        }
     }
+
+    private fun openSource(uri: Uri): java.io.InputStream = if (uri.scheme == "file") {
+        FileInputStream(File(requireNotNull(uri.path)))
+    } else context.contentResolver.openInputStream(uri) ?: error("Source is missing; relink it before saving")
 
     suspend fun saveRecipe(uri: Uri, recipe: RecipeV2) = withContext(Dispatchers.IO) {
         writeText(uri, RecipeCodec.encode(recipe))
@@ -45,9 +73,10 @@ class ProjectStore(private val context: Context) {
         RecipeCodec.decodeAny(readText(uri), supportedTypes)
     }
 
-    suspend fun exportPng(uri: Uri, bitmap: Bitmap) = withContext(Dispatchers.IO) {
+    suspend fun exportPng(uri: Uri, pixels: PixelBuffer) = withContext(Dispatchers.IO) {
         val output = context.contentResolver.openOutputStream(uri, "wt") ?: throw IOException("Unable to open PNG destination")
-        output.use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) { "Android bitmap encoder failed" } }
+        val coroutine = currentCoroutineContext()
+        output.use { PngWriter.write(pixels, it) { coroutine.ensureActive() } }
     }
 
     private fun writeText(uri: Uri, text: String) {
@@ -60,19 +89,7 @@ class ProjectStore(private val context: Context) {
         return input.use { it.readBytesLimited(maximumBytes).toString(Charsets.UTF_8) }
     }
 
-    private fun writeAtomic(destination: File, bytes: ByteArray) {
-        val temporary = File(destination.parentFile, "${destination.name}.tmp")
-        temporary.outputStream().use { output ->
-            output.write(bytes); output.flush()
-            if (output is java.io.FileOutputStream) output.fd.sync()
-        }
-        if (!temporary.renameTo(destination)) {
-            destination.delete()
-            if (!temporary.renameTo(destination)) {
-                temporary.delete(); throw IOException("Unable to replace autosave")
-            }
-        }
-    }
+
 }
 
 private fun java.io.InputStream.readBytesLimited(maximumBytes: Int): ByteArray {
