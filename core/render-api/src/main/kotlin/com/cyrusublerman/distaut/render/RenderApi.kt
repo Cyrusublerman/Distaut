@@ -26,6 +26,9 @@ data class RenderRequest(
     val documentHeight: Int = source.height,
     val originX: Int = 0,
     val originY: Int = 0,
+    val graph: com.cyrusublerman.distaut.model.ProcessingGraph? = null,
+    val viewerNodeId: String? = null,
+    val workingMemoryBudgetBytes: Long = Long.MAX_VALUE,
 ) {
     init { require(documentWidth > 0 && documentHeight > 0) }
     val scaleX: Double get() = source.width.toDouble() / documentWidth

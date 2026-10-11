@@ -200,13 +200,13 @@ private fun NodeCell(
 }
 
 @Composable
-private fun ParameterPanel(
+internal fun ParameterPanel(
     effect: EffectInstance,
     definition: EffectDefinition?,
     viewModel: EditorViewModel,
 ) {
     Column(Modifier.fillMaxWidth().background(UiBackground)) {
-        NumericSliderRow("OPACITY", "${(effect.opacity * 100).roundToInt()}%", effect.opacity.toFloat(), 0f..1f, 0,
+        if (effect.type !in com.cyrusublerman.distaut.model.GraphPorts.graphTypes) NumericSliderRow("OPACITY", "${(effect.opacity * 100).roundToInt()}%", effect.opacity.toFloat(), 0f..1f, 0,
             finished = viewModel::finishAdjustment, reset = { viewModel.setOpacity(effect.id, 1.0); viewModel.finishAdjustment() }) {
             viewModel.setOpacity(effect.id, it.toDouble())
         }

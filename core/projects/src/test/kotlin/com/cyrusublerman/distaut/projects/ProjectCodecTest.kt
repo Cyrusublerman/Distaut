@@ -8,6 +8,18 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class ProjectCodecTest {
+    @Test fun graphProjectRoundTripKeepsBranchesAndPositions() {
+        val a = EffectInstance("a", "invert")
+        val b = EffectInstance("b", "greyscale")
+        val graph = com.cyrusublerman.distaut.model.ProcessingGraph(connections = listOf(
+            com.cyrusublerman.distaut.model.GraphConnection("@source", "a", "image"),
+            com.cyrusublerman.distaut.model.GraphConnection("@source", "b", "image")), outputNodeId = "a",
+            positions = mapOf("b" to com.cyrusublerman.distaut.model.NodePosition(30f, 120f)))
+        val document = ProjectDocument(engineVersion = "test", savedAtEpochMillis = 1,
+            project = ProjectState(effects = listOf(a,b), graph = graph))
+        assertEquals(document, ProjectCodec.decode(ProjectCodec.encode(document), setOf("invert", "greyscale")))
+    }
+
     @Test
     fun roundTripsProjectAndSourceMetadata() {
         val state = ProjectState(

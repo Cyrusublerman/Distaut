@@ -37,7 +37,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 internal enum class SidebarMode {
-    PIPELINE,
+    NODES,
     CANVAS,
 }
 
@@ -51,7 +51,7 @@ fun EditorRoute(viewModel: EditorViewModel = viewModel()) {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    var mode by rememberSaveable { mutableStateOf(SidebarMode.PIPELINE) }
+    var mode by rememberSaveable { mutableStateOf(SidebarMode.NODES) }
     var debug by rememberSaveable { mutableStateOf(false) }
 
     val imagePicker = rememberLauncherForActivityResult(
@@ -100,7 +100,7 @@ fun EditorRoute(viewModel: EditorViewModel = viewModel()) {
         openProject = {
             projectOpener.launch(arrayOf("application/zip", "application/octet-stream", "application/json", "text/plain"))
         },
-        saveRecipe = { recipeSaver.launch("distaut-recipe-v3.json") },
+        saveRecipe = { recipeSaver.launch("distaut-recipe-v4.json") },
         openRecipe = {
             recipeOpener.launch(arrayOf("application/json", "text/plain"))
         },
@@ -207,10 +207,18 @@ private fun Workspace(
     exportDiagnostics: () -> Unit,
     viewModel: EditorViewModel,
 ) {
+    var graphExpanded by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val workspaceWidth = maxWidth
         val workspaceHeight = maxHeight
-        if (workspaceWidth >= 800.dp) {
+        if (!debug && mode == SidebarMode.NODES) {
+            Column(Modifier.fillMaxSize()) {
+                if (!graphExpanded) Viewport(state, Modifier.fillMaxWidth().weight(0.43f), viewModel)
+                GraphWorkbench(state, viewModel, Modifier.fillMaxWidth().weight(0.57f),
+                    expanded = graphExpanded, onToggleExpand = { graphExpanded = !graphExpanded },
+                    onImageSettings = { setMode(SidebarMode.CANVAS) })
+            }
+        } else if (workspaceWidth >= 800.dp) {
             val sidebar = SidebarWidth.coerceAtMost(workspaceWidth * 0.45f)
             val viewportWidth = (
                 workspaceWidth - sidebar - BorderWidth
@@ -289,10 +297,10 @@ private fun Sidebar(
                 val tabWidth = maxWidth / 2
                 Row(Modifier.fillMaxSize()) {
                     ToolCell(
-                        "PIPELINE",
+                        "NODES",
                         tabWidth,
-                        active = mode == SidebarMode.PIPELINE,
-                    ) { setMode(SidebarMode.PIPELINE) }
+                        active = mode == SidebarMode.NODES,
+                    ) { setMode(SidebarMode.NODES) }
                     ToolCell(
                         "CANVAS",
                         tabWidth,
@@ -301,7 +309,7 @@ private fun Sidebar(
                 }
             }
             when (mode) {
-                SidebarMode.PIPELINE -> PipelinePanel(state, viewModel)
+                SidebarMode.NODES -> NodeInspector(state, viewModel)
                 SidebarMode.CANVAS -> CanvasPanel(state, viewModel)
             }
         }

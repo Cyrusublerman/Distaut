@@ -8,6 +8,8 @@ import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import com.cyrusublerman.distaut.model.ParameterValue
+import com.cyrusublerman.distaut.model.NodePosition
+import com.cyrusublerman.distaut.model.SOURCE_NODE_ID
 import com.cyrusublerman.distaut.projects.SourceAssetLoader
 import java.io.File
 import kotlinx.coroutines.*
@@ -23,6 +25,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.test.assertSame
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -98,6 +101,42 @@ class EditorRegressionTest {
         for (value in 7..30) vm.setParameter(id,"levels",ParameterValue.Integer(value))
         vm.finishAdjustment(); vm.undo()
         assertEquals(ParameterValue.Integer(6),vm.uiState.value.project.effects.single().parameters["levels"])
+    }
+    @Test fun branchingExampleViewsMaskButExportsFinalImageAndReopensTopology() = runBlocking {
+        val vm = editor(); vm.settled()
+        vm.importSource(source("graph-source.png", Color.RED)); vm.settled()
+        vm.createBranchExample()
+        val original = vm.settled()
+        assertEquals(null, original.error)
+        val mask = original.project.effects.first { it.type == "edge_mask" }
+        assertEquals(3, original.project.graph!!.connections.count { it.from == SOURCE_NODE_ID })
+        vm.viewNode(mask.id)
+        assertEquals(Color.BLACK, vm.settled().renderedBitmap!!.getPixel(0, 0))
+        val png = File(app.cacheDir, "graph-final.png")
+        vm.exportPng(Uri.fromFile(png)); assertEquals(null, vm.settled().error)
+        val exported = android.graphics.BitmapFactory.decodeFile(png.path)
+        assertEquals(Color.RED, exported.getPixel(0, 0)); exported.recycle()
+        val saved = File(app.cacheDir, "graph-project.distaut")
+        vm.saveProject(Uri.fromFile(saved)); assertEquals(null, vm.settled().error)
+        vm.remove(mask.id); vm.settled()
+        vm.openProject(Uri.fromFile(saved))
+        val reopened = vm.settled()
+        assertEquals(null, reopened.error)
+        assertEquals(original.project.graph, reopened.project.graph)
+        assertEquals(original.project.effects, reopened.project.effects)
+        assertEquals(Color.RED, reopened.renderedBitmap!!.getPixel(0, 0))
+    }
+    @Test fun movingAndArrangingNodesPreserveTheRenderedBitmap() = runBlocking {
+        val vm = editor(); vm.settled()
+        vm.importSource(source("layout-source.png", Color.RED)); vm.settled()
+        vm.createBranchExample()
+        val original = vm.settled()
+        vm.positionNode(SOURCE_NODE_ID, NodePosition(100f, 400f))
+        assertSame(original.renderedBitmap, vm.settled().renderedBitmap)
+        vm.arrangeNodes()
+        assertSame(original.renderedBitmap, vm.settled().renderedBitmap)
+        vm.undo()
+        assertSame(original.renderedBitmap, vm.settled().renderedBitmap)
     }
     @Test fun fallbackDecoderRotatesPixelsAndDocumentDimensions() = runBlocking {
         val file = File(app.cacheDir, "oriented.jpg")

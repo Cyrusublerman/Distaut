@@ -4,23 +4,34 @@ Distaut is the native Android tablet implementation of the DISTORT image-effect 
 
 The SiteBoy DISTORT implementation remains source lineage and behaviour evidence. Distaut owns Android interaction, persistence, recipe compatibility, mobile rendering and device validation.
 
-## Current vertical slice
+## Current node editor (0.5.0-dev)
 
 - Android Photo Picker image import with EXIF-aware orientation;
 - durable source retention with app-managed fallback copies;
 - adaptive Jetpack Compose editor layouts;
-- ordered effect stacks with bypass, solo, reorder and removal;
+- a pannable, zoomable node canvas with movable cards and typed image/mask connections;
+- branching DAG execution, mask-controlled Mix, luminance/edge masks and mask inversion;
+- independent viewer and final export targets, including mask inspection;
+- undoable wiring, node movement, bypass, deletion and an editable branching example;
 - declarative effect definitions and generated integer controls;
 - undo and redo;
 - autosave and restoration;
 - portable `.distaut` project save and reopen, including source assets;
-- versioned recipe v3 save/load, v2 read compatibility and conservative SiteBoy recipe v1 import;
+- versioned recipe v4 save/load, v2/v3 read compatibility and conservative SiteBoy recipe v1 import;
 - snapshot-based PNG export with full-resolution or bounded sizes;
 - document-space spatial parameters and labelled approximate previews;
 - full-resolution detail, pan/zoom, before/after wipe and numeric adjustment;
 - one undo step per slider gesture;
 - cancellable preview rendering with stale-result rejection;
 - versioned Kotlin CPU reference effects: greyscale, invert, posterise, ordered dither, pixelate and box blur.
+
+## Using the graph
+
+Open an image, then use **EXAMPLE** to load a real branch-and-merge graph: the source feeds blur, posterise and an edge mask; Mix combines the two image branches through that mask. Undo restores your prior graph.
+
+Use **+ NODE** to add from the selected node. Select SOURCE first to start a parallel branch. Tap an **OUT** row and then a matching input to connect; the inspector also offers explicit input selection and disconnection. Drag headers to move nodes, pan/pinch the background, and use FIT or ARRANGE when needed. EXPAND gives the graph the full workspace; SPLIT VIEW restores the image preview. F marks the final export and V marks the viewer. On narrower screens INSPECT switches between the graph and parameter controls.
+
+The renderer currently uses CPU RGBA8 buffers, one retained source and one designated export output. It is not a GPU, tiled, multi-source or batch editor yet. [Reference assessment](docs/node-editor-references.md) records the direction informed by Arcbrush and the supplied repositories.
 
 ## Toolchain
 
@@ -57,9 +68,10 @@ The Android build workflow runs for pull requests and pushes to `main`. It:
 3. runs JVM and Android unit tests across all current modules;
 4. runs Android lint;
 5. assembles the debug APK;
-6. uploads the APK and diagnostic reports as workflow artifacts.
+6. checks APK signing and 16 KiB native-library alignment;
+7. uploads the APK and diagnostic reports as workflow artifacts.
 
-The full workflow has been validated on GitHub Actions: wrapper verification, unit tests, lint, debug assembly and artifact upload all pass.
+See the pull request checks for the current build result. The preceding 0.4.0 build passed unit tests, lint and assembly; graph-specific validation is tracked separately.
 
 ## Repository boundary
 
@@ -67,10 +79,10 @@ Distaut does not copy SiteBoy's DOM, browser-worker, WebGPU/WebGL or fixed-cache
 
 ## Project and recipe compatibility
 
-Use SAVE to create a portable `.distaut` ZIP package containing the source image and project manifest. Existing JSON-only projects still open, but their original source must remain accessible or be relinked through Tools. Recipes are image-independent and now use schema 3. Older builds must not be used to edit new projects/recipes.
+Use SAVE to create a portable `.distaut` ZIP package containing the source image and project manifest. Existing JSON-only projects still open, but their original source must remain accessible or be relinked through Tools. Recipes are image-independent and now use schema 4; project manifests use schema 3. Legacy stacks migrate to connected chains without changing effect algorithms. Older builds must not be used to edit new projects/recipes.
 
 Old effects retain their legacy algorithm and composition semantics. Select **UPDATE TO CORRECTED ALGORITHM** in an effect to adopt the corrected dither/alpha behaviour; this is undoable. Newly added effects use corrected algorithms by default. Unresolved imported effects stay disabled and preserve their original payload through saves.
 
-**VIEW** previews the stack through an effect. Export always uses the complete enabled stack. Spatial sizes are in original, oriented image pixels; fit previews approximate operations that do not commute with downsampling. Use **100%** for full-resolution inspection when memory permits.
+**VIEW THIS OUTPUT** previews the selected node, including masks. **SET AS FINAL EXPORT** chooses the image node exported by SAVE PNG. Viewing another node does not change export. Only ancestors of the requested output execute, and shared branches execute once per render. Spatial sizes are in original, oriented image pixels; fit previews approximate operations that do not commute with downsampling. Use **100%** for full-resolution inspection when memory permits.
 
 Full-resolution processing has a conservative allocation preflight. If an image exceeds the budget, select a smaller maximum export size in Canvas. PNG encoding is streamed, but the kernels still process an in-memory image. See [implementation status](docs/implementation-status.md) for remaining architectural and device-validation work.
