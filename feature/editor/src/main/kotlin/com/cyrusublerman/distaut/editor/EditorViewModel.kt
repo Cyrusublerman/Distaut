@@ -15,6 +15,7 @@ import java.io.File
 import com.cyrusublerman.distaut.recipes.RecipeMapper
 import com.cyrusublerman.distaut.render.*
 import com.cyrusublerman.distaut.render.kotlin.KotlinPipelineRenderer
+import com.cyrusublerman.distaut.render.kotlin.KotlinGraphRenderer
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
@@ -23,7 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-private const val ENGINE_VERSION = "0.4.0-dev"
+private const val ENGINE_VERSION = "0.5.0-dev"
 
 data class EditorUiState(
     val project: ProjectState = ProjectState(),
@@ -44,11 +45,12 @@ data class EditorUiState(
     val exportMaximumDimension: Int? = null,
     val warnings: List<String> = emptyList(),
     val saved: Boolean = true,
+    val viewerNodeId: String? = null,
 )
 
 class EditorViewModel(application: Application) : AndroidViewModel(application) {
-    private val renderer = KotlinPipelineRenderer(minOf(32L * 1024 * 1024, Runtime.getRuntime().maxMemory() / 16))
-    private val history = ProjectHistory(ProjectState())
+    private val renderer = KotlinGraphRenderer()
+    private val history = ProjectHistory(ProjectState(graph = ProcessingGraph()))
     private val previewGeneration = AtomicLong()
     private var sourceGeneration = 0L
     private var interactionEpoch = 0L
@@ -63,6 +65,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private var sourcePixels: PixelBuffer? = null
     private var exporting = false
     private var renderedProject: ProjectState? = null
+    private var renderedViewer: String? = null
     private val _uiState = MutableStateFlow(EditorUiState())
     val uiState: StateFlow<EditorUiState> = _uiState.asStateFlow()
 
@@ -91,11 +94,68 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     fun addEffect(type: String) {
         val definition = BuiltInEffects.registry.definition(type) ?: return
         val effect = definition.instantiate(UUID.randomUUID().toString())
-        dispatch(EditorCommand.AddEffect(effect))
+        if (!dispatchGraph(EditorCommand.AddGraphNode(effect, _uiState.value.selectedEffectId))) return
         _uiState.update { it.copy(selectedEffectId = effect.id) }
+        viewNode(effect.id)
+    }
+    fun viewNode(id: String?) {
+        _uiState.update { it.copy(viewerNodeId = id, showSource = false, stalePreview = true) }
+        scheduleRender()
+    }
+    fun setOutput(id: String) { if (dispatchGraph(EditorCommand.SetGraphOutput(id))) viewNode(null) }
+    fun connect(from: String, to: String, input: String): Boolean = dispatchGraph(EditorCommand.Connect(from, to, input))
+    fun disconnect(to: String, input: String) { dispatchGraph(EditorCommand.Disconnect(to, input)) }
+    fun positionNode(id: String, position: NodePosition) {
+        history.endTransaction()
+        history.dispatch(EditorCommand.SetNodePosition(id, position))
+        publishHistoryState()
+        _uiState.update { it.copy(saved = false) }
+        scheduleAutosave()
+        scheduleRender()
+    }
+    fun arrangeNodes() {
+        val graph = history.current.processingGraph()
+        val levels = mutableMapOf(SOURCE_NODE_ID to 0)
+        fun level(id: String): Int = levels.getOrPut(id) {
+            (graph.connections.filter { it.to == id }.maxOfOrNull { level(it.from) } ?: -1) + 1
+        }
+        val rows = mutableMapOf<Int, Int>()
+        val positions = (listOf(SOURCE_NODE_ID) + history.current.effects.map { it.id }).associateWith { id ->
+            val column = level(id); val row = rows[column] ?: 0; rows[column] = row + 1
+            NodePosition((24f + column * 280f).coerceAtMost(9800f), (40f + row * 240f).coerceAtMost(9800f))
+        }
+        dispatchGraph(EditorCommand.ReplaceGraph(history.current.effects, graph.copy(positions = positions)))
+    }
+    fun createBranchExample() {
+        val poster = BuiltInEffects.Posterise.instantiate(UUID.randomUUID().toString())
+        val blur = BuiltInEffects.BoxBlur.instantiate(UUID.randomUUID().toString()).copy(parameters = mapOf("radius" to ParameterValue.Integer(12)))
+        val mask = BuiltInEffects.EdgeMask.instantiate(UUID.randomUUID().toString())
+        val mix = BuiltInEffects.Mix.instantiate(UUID.randomUUID().toString()).copy(parameters = mapOf("amount" to ParameterValue.Decimal(1.0)))
+        val nodes = listOf(poster, blur, mask, mix)
+        val graph = ProcessingGraph(connections = listOf(
+            GraphConnection(SOURCE_NODE_ID, poster.id, "image"), GraphConnection(SOURCE_NODE_ID, blur.id, "image"),
+            GraphConnection(SOURCE_NODE_ID, mask.id, "image"), GraphConnection(blur.id, mix.id, "a"),
+            GraphConnection(poster.id, mix.id, "b"), GraphConnection(mask.id, mix.id, "mask"),
+        ), outputNodeId = mix.id, positions = mapOf(
+            SOURCE_NODE_ID to NodePosition(24f, 260f), poster.id to NodePosition(304f, 24f),
+            blur.id to NodePosition(304f, 260f), mask.id to NodePosition(304f, 496f), mix.id to NodePosition(604f, 240f),
+        ))
+        if (dispatchGraph(EditorCommand.ReplaceGraph(nodes, graph))) {
+            _uiState.update { it.copy(selectedEffectId = mix.id, viewerNodeId = null, showSource = false) }
+            scheduleRender()
+        }
+    }
+    private fun dispatchGraph(command: EditorCommand): Boolean = try {
+        dispatch(command)
+        true
+    } catch (error: IllegalArgumentException) { failOperation("Graph", error); false }
+      catch (error: IllegalStateException) { failOperation("Graph", error); false }
+    private fun graphMemoryBudget(): Long {
+        val runtime = Runtime.getRuntime()
+        return (runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()).coerceAtLeast(0L) * 3 / 4
     }
     fun setEnabled(id: String, enabled: Boolean) = dispatch(EditorCommand.SetEffectEnabled(id, enabled))
-    fun setSolo(id: String?) = dispatch(EditorCommand.SetSoloEffect(id))
+    fun setSolo(id: String?) = viewNode(id)
     fun setParameter(id: String, key: String, value: ParameterValue) {
         val effect = history.current.effects.firstOrNull { it.id == id } ?: return
         val parameter = BuiltInEffects.registry.definition(effect.type)?.parameters?.firstOrNull { it.key == key } ?: return
@@ -120,8 +180,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val index = history.current.effects.indexOfFirst { it.id == id }
         if (index >= 0) dispatch(EditorCommand.MoveEffect(id, index + delta))
     }
-    fun remove(id: String) = dispatch(EditorCommand.RemoveEffect(id))
-    fun select(id: String) = _uiState.update { it.copy(selectedEffectId = id.takeUnless { _ -> it.selectedEffectId == id }) }
+    fun remove(id: String) { if (id != SOURCE_NODE_ID) dispatchGraph(EditorCommand.RemoveEffect(id)) }
+    fun select(id: String) = _uiState.update { it.copy(selectedEffectId = id) }
     fun setShowSource(show: Boolean) = _uiState.update { it.copy(showSource = show) }
     fun setCompare(compare: Boolean) = _uiState.update { it.copy(compare = compare) }
     fun setExportMaximumDimension(value: Int?) = _uiState.update { it.copy(exportMaximumDimension = value) }
@@ -178,7 +238,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         launchSourceOperation("OPENING PROJECT") { ticket ->
             val document = projectStore.loadProject(uri)
             if (ticket != sourceGeneration) return@launchSourceOperation
-            history.replace(document.project)
+            history.replace(document.project.copy(graph = document.project.processingGraph(), soloEffectId = null))
             clearBinding()
             publishHistoryState()
             _uiState.update { it.copy(fullDetail = false, saved = true, warnings = emptyList()) }
@@ -224,9 +284,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 val pixels = try { withContext(Dispatchers.Default) { bitmap.toPixelBuffer() } } finally { bitmap.recycle() }
                 val context = currentCoroutineContext()
                 val result = withContext(Dispatchers.Default) {
-                    renderer.render(RenderRequest(0, snapshot.revision, pixels, snapshot.finalEffects(),
+                    renderer.render(RenderRequest(0, snapshot.revision, pixels, snapshot.effects,
                         RenderQuality.FINAL, snapshot.globalSeed, CancellationProbe { !context.isActive },
-                        asset.width, asset.height))
+                        asset.width, asset.height, graph = snapshot.processingGraph(),
+                        workingMemoryBudgetBytes = graphMemoryBudget()))
                 }
                 projectStore.exportPng(uri, result.output)
                 DiagnosticsLog.info("export", "End-to-end PNG ${(System.nanoTime() - started) / 1_000_000} ms; revision=${snapshot.revision}")
@@ -264,7 +325,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             val document = projectStore.loadAutosave()
             if (epoch != interactionEpoch || ticket != sourceGeneration) return@launchSourceOperation
             if (document != null) {
-                history.replace(document.project)
+                history.replace(document.project.copy(graph = document.project.processingGraph(), soloEffectId = null))
                 publishHistoryState()
                 loadCurrentSource(ticket)
             }
@@ -339,7 +400,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
     private fun publishHistoryState() {
         _uiState.update { state -> state.copy(project = history.current,
-            selectedEffectId = state.selectedEffectId?.takeIf { id -> history.current.effects.any { it.id == id } },
+            selectedEffectId = state.selectedEffectId?.takeIf { id -> id == SOURCE_NODE_ID || history.current.effects.any { it.id == id } },
+            viewerNodeId = state.viewerNodeId?.takeIf { id -> id == SOURCE_NODE_ID || history.current.effects.any { it.id == id } },
             canUndo = history.canUndo, canRedo = history.canRedo) }
     }
     private fun scheduleAutosave() {
@@ -364,7 +426,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
     private fun scheduleRender(debounceMillis: Long = 0) {
         val project = history.current
-        if (renderedProject == project && !_uiState.value.stalePreview && !exporting) return
+        val viewer = _uiState.value.viewerNodeId
+        if (renderedProject == project && renderedViewer == viewer && !_uiState.value.stalePreview && !exporting) return
         val asset = project.source
         val pixels = sourcePixels
         val ticket = previewGeneration.incrementAndGet()
@@ -380,15 +443,17 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 val started = System.nanoTime()
                 val context = currentCoroutineContext()
                 val bitmap = withContext(Dispatchers.Default) {
-                    val result = renderer.render(RenderRequest(ticket, project.revision, pixels, project.activeEffects(),
-                        RenderQuality.PREVIEW, project.globalSeed, CancellationProbe { !context.isActive }, asset.width, asset.height))
+                    val result = renderer.render(RenderRequest(ticket, project.revision, pixels, project.effects,
+                        RenderQuality.PREVIEW, project.globalSeed, CancellationProbe { !context.isActive }, asset.width, asset.height,
+                        graph = project.processingGraph(), viewerNodeId = viewer, workingMemoryBudgetBytes = graphMemoryBudget()))
                     ensureActive()
                     result.output.toBitmap()
                 }
                 ensureActive()
                 // Publication happens on Main, after conversion and after the last identity check.
-                if (ticket == previewGeneration.get() && boundSource == asset && history.current == project) {
+                if (ticket == previewGeneration.get() && boundSource == asset && history.current == project && _uiState.value.viewerNodeId == viewer) {
                     renderedProject = project
+                    renderedViewer = viewer
                     _uiState.update { it.copy(renderedBitmap = bitmap, rendering = false, stalePreview = false,
                         lastRenderDurationMillis = (System.nanoTime() - started) / 1_000_000.0) }
                 }

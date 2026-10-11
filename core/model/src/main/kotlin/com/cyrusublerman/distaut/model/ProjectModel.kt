@@ -55,6 +55,7 @@ data class ProjectState(
     val soloEffectId: String? = null,
     val globalSeed: Long = 42L,
     val revision: Long = 0L,
+    val graph: ProcessingGraph? = null,
 ) {
     init {
         require(schemaVersion >= 1)
@@ -78,6 +79,12 @@ data class ProjectState(
 }
 
 sealed interface EditorCommand {
+    data class AddGraphNode(val effect: EffectInstance, val upstream: String? = null) : EditorCommand
+    data class Connect(val from: String, val to: String, val input: String) : EditorCommand
+    data class Disconnect(val to: String, val input: String) : EditorCommand
+    data class SetGraphOutput(val nodeId: String) : EditorCommand
+    data class SetNodePosition(val nodeId: String, val position: NodePosition) : EditorCommand
+    data class ReplaceGraph(val effects: List<EffectInstance>, val graph: ProcessingGraph) : EditorCommand
     data class SetSource(val source: SourceAsset?) : EditorCommand
     data class AddEffect(val effect: EffectInstance, val index: Int? = null) : EditorCommand
     data class RemoveEffect(val effectId: String) : EditorCommand
@@ -93,8 +100,51 @@ sealed interface EditorCommand {
 object ProjectReducer {
     fun reduce(state: ProjectState, command: EditorCommand): ProjectState {
         val next = when (command) {
+            is EditorCommand.AddGraphNode -> {
+                require(state.effects.none { it.id == command.effect.id }) { "Duplicate node ID" }
+                val graph = state.processingGraph()
+                val effects = state.effects + command.effect
+                val upstream = command.upstream ?: graph.outputNodeId
+                val input = GraphPorts.inputs(command.effect.type).entries.firstOrNull {
+                    it.value == GraphRules.outputType(upstream, state.effects)
+                }?.key
+                val position = graph.positions[upstream] ?: NodePosition(24f, 48f)
+                val connected = graph.copy(
+                    connections = graph.connections + listOfNotNull(input?.let { GraphConnection(upstream, command.effect.id, it) }),
+                    positions = graph.positions + (command.effect.id to NodePosition((position.x + 280f).coerceAtMost(9800f),
+                        (position.y + if (graph.connections.any { it.from == upstream }) 210f else 0f).coerceAtMost(9800f))),
+                    outputNodeId = if (input != null && upstream == graph.outputNodeId && command.effect.type !in GraphPorts.graphTypes)
+                        command.effect.id else graph.outputNodeId,
+                )
+                GraphRules.validate(effects, connected)
+                state.copy(effects = effects, graph = connected)
+            }
+            is EditorCommand.Connect -> {
+                val graph = state.processingGraph()
+                val nextGraph = graph.copy(connections = graph.connections.filterNot { it.to == command.to && it.input == command.input } +
+                    GraphConnection(command.from, command.to, command.input))
+                GraphRules.validate(state.effects, nextGraph)
+                state.copy(graph = nextGraph)
+            }
+            is EditorCommand.Disconnect -> state.copy(graph = state.processingGraph().let { graph ->
+                graph.copy(connections = graph.connections.filterNot { it.to == command.to && it.input == command.input })
+            })
+            is EditorCommand.SetGraphOutput -> {
+                val graph = state.processingGraph().copy(outputNodeId = command.nodeId)
+                GraphRules.validate(state.effects, graph)
+                state.copy(graph = graph)
+            }
+            is EditorCommand.SetNodePosition -> {
+                require(command.nodeId == SOURCE_NODE_ID || state.effects.any { it.id == command.nodeId })
+                state.copy(graph = state.processingGraph().let { it.copy(positions = it.positions + (command.nodeId to command.position)) })
+            }
+            is EditorCommand.ReplaceGraph -> {
+                GraphRules.validate(command.effects, command.graph)
+                state.copy(effects = command.effects, graph = command.graph, soloEffectId = null)
+            }
             is EditorCommand.SetSource -> state.copy(source = command.source)
             is EditorCommand.AddEffect -> {
+                require(state.graph == null) { "Use graph node insertion for a connected document" }
                 require(state.effects.none { it.id == command.effect.id }) {
                     "Effect ID already exists: ${command.effect.id}"
                 }
@@ -103,10 +153,16 @@ object ProjectReducer {
                 state.copy(effects = effects)
             }
             is EditorCommand.RemoveEffect -> state.copy(
+                graph = state.graph?.let { graph -> graph.copy(
+                    connections = graph.connections.filterNot { it.from == command.effectId || it.to == command.effectId },
+                    outputNodeId = graph.outputNodeId.takeUnless { it == command.effectId } ?: SOURCE_NODE_ID,
+                    positions = graph.positions - command.effectId,
+                ) },
                 effects = state.effects.filterNot { it.id == command.effectId },
                 soloEffectId = state.soloEffectId.takeUnless { it == command.effectId },
             )
             is EditorCommand.MoveEffect -> {
+                require(state.graph == null) { "Move nodes on the graph; list order is not execution order" }
                 val from = state.effects.indexOfFirst { it.id == command.effectId }
                 if (from < 0) state else {
                     val effects = state.effects.toMutableList()

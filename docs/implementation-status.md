@@ -1,8 +1,19 @@
 # Implementation status
 
-Updated: 2026-10-11. Branch: `fix/editor-correctness-and-persistence`.
+Updated: 2026-10-12. Branch: `feat/node-graph-editor`.
 
-## Corrections implemented
+## Node graph implemented
+
+- The default workspace shows a real node canvas and image viewer. Nodes have persisted positions, typed image/mask sockets and editable wires. Touch-friendly input selection is also available in the inspector.
+- Execution follows a validated directed acyclic graph, not the order of the effects list. Shared branches execute once per request; unreachable nodes are skipped and intermediate values are released after their last consumer.
+- Mix has two image inputs and an optional mask. Luminance Mask, Edge Mask and Invert Mask produce explicit mask values.
+- The viewer can inspect any image or mask. Export independently follows the designated image output.
+- Connections, parameters, node positions, removal, output changes and the branching example are undoable. Missing sockets are permitted while authoring and reported when a requested output depends on them.
+- Recipe v4 and project manifest v3 preserve topology and positions. Legacy ordered documents migrate to chains without upgrading their pixel algorithms.
+- Graph memory preflight accounts for peak live branches plus scratch space. Cycles, incompatible ports, dangling references and mask export targets are rejected.
+- CI verifies the APK signature and native library alignment in addition to tests, lint and assembly.
+
+## Corrections retained from 0.4.0
 
 - Source asset, decoded bitmap and pixel buffer are bound together. Source-changing undo/redo reopens the matching asset. Superseded source loads and initial restoration cannot replace a newer request.
 - Export captures one immutable project and uses the full enabled stack independently of the preview-through target. Export/self-check do not invalidate preview generations.
@@ -28,7 +39,7 @@ Physical tablet responsiveness, stylus behaviour, lifecycle killing by a real OS
 
 ## Explicit limits and subsequent work
 
-The effect pipeline remains a linear stack. Typed graph execution, branching/masks, groups, a node canvas, vector fields, general region/tile execution and GPU acceleration are separate architectural features, not included in this corrective change.
+The graph is functional but deliberately small: six existing image effects plus four graph utilities, one source, and one final output. Groups, multiple sources, vector fields, batch outputs, general region/tile execution and GPU acceleration remain subsequent work. Cross-request downstream caching is not yet implemented; shared branches are memoised within each render. Canvas layout changes are persisted and currently trigger preview scheduling. See [reference assessment](node-editor-references.md).
 
 Full-resolution images that exceed available memory are rejected with a smaller-export instruction; streaming PNG does not make the image-processing kernels themselves tiled. Downsampled dither/quantisation remains approximate even when coordinate units agree. Use full-resolution inspection where the memory budget permits.
 

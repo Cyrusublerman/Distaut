@@ -3,19 +3,24 @@ package com.cyrusublerman.distaut.recipes
 import com.cyrusublerman.distaut.model.EffectInstance
 import com.cyrusublerman.distaut.model.ParameterValue
 import com.cyrusublerman.distaut.model.ProjectState
+import com.cyrusublerman.distaut.model.ProcessingGraph
+import com.cyrusublerman.distaut.model.processingGraph
+import com.cyrusublerman.distaut.model.GraphRules
 
 data class RecipeV2(
-    val schemaVersion: Int = 3,
+    val schemaVersion: Int = 4,
     val engineVersion: String,
     val sourceChecksum: String?,
     val sourceWidth: Int?,
     val sourceHeight: Int?,
     val globalSeed: Long,
     val effects: List<EffectInstance>,
+    val graph: ProcessingGraph? = null,
 ) {
     init {
-        require(schemaVersion in 2..3)
+        require(schemaVersion in 2..4)
         require(engineVersion.isNotBlank())
+        require(graph == null || schemaVersion >= 4) { "Graph recipes require schema 4" }
     }
 }
 
@@ -27,10 +32,12 @@ object RecipeMapper {
         sourceHeight = project.source?.height,
         globalSeed = project.globalSeed,
         effects = project.effects,
+        graph = project.processingGraph(),
     )
 
     fun applyToProject(recipe: RecipeV2, project: ProjectState): ProjectState = project.copy(
         effects = recipe.effects,
+        graph = recipe.graph ?: GraphRules.chain(recipe.effects),
         soloEffectId = null,
         globalSeed = recipe.globalSeed,
         revision = project.revision + 1,
@@ -51,6 +58,7 @@ object RecipeCodec {
                 "source" to source,
                 "globalSeed" to JsonValue.NumberValue(recipe.globalSeed.toString()),
                 "effects" to JsonValue.Array(recipe.effects.map(EffectJsonCodec::encode)),
+                "graph" to GraphJsonCodec.encode(recipe.graph),
             ),
             pretty,
         )
@@ -59,7 +67,7 @@ object RecipeCodec {
     fun decodeAny(text: String, supportedEffectTypes: Set<String>): RecipeImportResult {
         val root = JsonCodec.parse(text).asObjectOrNull() ?: error("Recipe root must be a JSON object")
         return when {
-            root["schemaVersion"].asNumberOrNull()?.asIntExact()?.let { it in 2..3 } == true -> RecipeImportResult(decode(text, supportedEffectTypes))
+            root["schemaVersion"].asNumberOrNull()?.asIntExact()?.let { it in 2..4 } == true -> RecipeImportResult(decode(text, supportedEffectTypes))
             root["version"].asNumberOrNull()?.asIntExact() == 1 -> SiteBoyRecipeV1Importer.import(text)
             else -> error("Unrecognised recipe schema")
         }
@@ -68,7 +76,7 @@ object RecipeCodec {
     fun decode(text: String, supportedEffectTypes: Set<String>): RecipeV2 {
         val root = JsonCodec.parse(text).asObjectOrNull() ?: error("Recipe root must be a JSON object")
         val schema = root["schemaVersion"].asNumberOrNull()?.asIntExact() ?: error("Recipe schemaVersion is required")
-        require(schema in 2..3)
+        require(schema in 2..4)
         val source = root["source"].asObjectOrNull()
         val effects = root["effects"].asArrayOrNull()?.values
             ?.mapIndexed { index, node -> EffectJsonCodec.decode(node, index, supportedEffectTypes) }
@@ -81,6 +89,7 @@ object RecipeCodec {
             sourceHeight = source?.get("height").asNumberOrNull()?.asIntExact(),
             globalSeed = root["globalSeed"].asNumberOrNull()?.asLongExact() ?: 42L,
             effects = effects,
+            graph = GraphJsonCodec.decode(root["graph"], effects),
         )
     }
 }

@@ -173,7 +173,19 @@ object BuiltInEffects {
         ),
     )
 
-    val registry = EffectRegistry(listOf(Greyscale, Invert, Posterise, OrderedDither, Pixelate, BoxBlur))
+    val Mix = EffectDefinition("mix", "MIX IMAGES", "COMPOSITE", "associated-mix-v1", listOf(
+        ParameterDefinition.Decimal("amount", "MIX B", ParameterValue.Decimal(0.5), 0.0, 1.0, 0.01),
+    ))
+    val LuminanceMask = EffectDefinition("luminance_mask", "LUMINANCE MASK", "MASK", "encoded-luma-mask-v1", listOf(
+        ParameterDefinition.Decimal("threshold", "THRESHOLD", ParameterValue.Decimal(0.5), 0.0, 1.0, 0.01),
+        ParameterDefinition.Decimal("softness", "SOFTNESS", ParameterValue.Decimal(1.0), 0.01, 1.0, 0.01),
+    ))
+    val EdgeMask = EffectDefinition("edge_mask", "EDGE MASK", "MASK", "central-difference-mask-v1", listOf(
+        ParameterDefinition.Decimal("gain", "EDGE GAIN", ParameterValue.Decimal(4.0), 0.1, 20.0, 0.1),
+    ))
+    val InvertMask = EffectDefinition("invert_mask", "INVERT MASK", "MASK", "invert-mask-v1")
+    val registry = EffectRegistry(listOf(Greyscale, Invert, Posterise, OrderedDither, Pixelate, BoxBlur,
+        Mix, LuminanceMask, EdgeMask, InvertMask))
 }
 
 /** Single validation policy used by controls, imported recipes and the renderer. */
