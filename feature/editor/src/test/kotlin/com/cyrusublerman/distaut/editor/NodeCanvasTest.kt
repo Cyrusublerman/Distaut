@@ -5,10 +5,10 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
 import android.os.Looper
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.*
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
 import com.cyrusublerman.distaut.model.SOURCE_NODE_ID
@@ -28,7 +28,7 @@ import kotlin.test.*
 @Config(sdk = [28], qualifiers = "w1280dp-h900dp-mdpi")
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NodeCanvasTest {
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private lateinit var vm: EditorViewModel
     private val store = ViewModelStore()
 
@@ -50,6 +50,7 @@ class NodeCanvasTest {
         settle()
         compose.runOnIdle { vm.createBranchExample() }
         settle()
+        capture("initial-${app.resources.configuration.screenWidthDp}")
     }
     @After fun tearDown() { compose.runOnIdle { store.clear() } }
     private fun settle() {
@@ -64,7 +65,15 @@ class NodeCanvasTest {
     private fun capture(name: String) {
         val file = File("build/reports/node-ui/$name.png")
         file.parentFile!!.mkdirs()
-        file.outputStream().use { compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it) }
+        // Capture the native Robolectric view directly; PixelCopy waits for a real window redraw.
+        compose.runOnIdle {
+            val view = compose.activity.window.decorView
+            val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+            view.draw(android.graphics.Canvas(bitmap))
+            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bitmap.recycle()
+        }
+        File(file.parentFile, "$name.txt").writeText(compose.onRoot(useUnmergedTree = true).printToString())
     }
     @Test fun tabletShowsBranchesAndSupportsTouchWiringDraggingAndUndo() {
         compose.onNodeWithContentDescription("Move or select SOURCE").assertIsDisplayed()
