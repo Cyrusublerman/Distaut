@@ -43,11 +43,8 @@ class ProjectStore(private val context: Context) {
     suspend fun saveProject(uri: Uri, project: ProjectState, engineVersion: String) = withContext(Dispatchers.IO) {
         val snapshot = ProjectDocument(engineVersion = engineVersion, savedAtEpochMillis = System.currentTimeMillis(), project = project)
         val coroutine = currentCoroutineContext()
-        val source = project.source?.let { openSource(Uri.parse(it.uri)) }
-        try {
-            val output = context.contentResolver.openOutputStream(uri, "wt") ?: error("Unable to open destination")
-            output.use { PortableProject.write(snapshot, source, it) { coroutine.ensureActive() } }
-        } finally { source?.close() }
+        val output = context.contentResolver.openOutputStream(uri, "wt") ?: error("Unable to open destination")
+        output.use { PortableProject.writeAssets(snapshot, { asset -> openSource(Uri.parse(asset.uri)) }, it) { coroutine.ensureActive() } }
     }
 
     suspend fun loadProject(uri: Uri): ProjectDocument = withContext(Dispatchers.IO) {

@@ -40,7 +40,7 @@ private val MaskWire = Color(0xFFFFBF69)
 private val ImageSocket = Color(0xFF006583)
 private val MaskSocket = Color(0xFF8C4B00)
 
-internal fun nodeName(id: String, state: EditorUiState): String = if (id == SOURCE_NODE_ID) "SOURCE"
+internal fun nodeName(id: String, state: EditorUiState): String = if (id in state.project.processingGraph().sources) state.project.processingGraph().sources.getValue(id).label
     else state.project.effects.firstOrNull { it.id == id }?.let { node ->
         if (!node.isResolved) "UNRESOLVED ${node.type}" else BuiltInEffects.registry.definition(node.type)?.displayName ?: node.type
     } ?: "MISSING"
@@ -48,14 +48,15 @@ internal fun nodeName(id: String, state: EditorUiState): String = if (id == SOUR
 @Composable
 internal fun GraphWorkbench(state: EditorUiState, viewModel: EditorViewModel, modifier: Modifier,
     expanded: Boolean = false, onToggleExpand: (() -> Unit)? = null, onImageSettings: () -> Unit) {
+    var outputsMenu by remember { mutableStateOf(false) }
     var catalogue by remember { mutableStateOf(false) }
     var example by remember { mutableStateOf(false) }
     var inspector by rememberSaveable { mutableStateOf(false) }
     var fitRequest by remember { mutableIntStateOf(0) }
     var wireSource by remember { mutableStateOf<String?>(null) }
     val graph = state.project.processingGraph()
-    LaunchedEffect(state.project.effects.map { it.id }) {
-        if (wireSource != SOURCE_NODE_ID && state.project.effects.none { it.id == wireSource }) wireSource = null
+    LaunchedEffect(state.project.nodeIds()) {
+        if (wireSource !in state.project.nodeIds()) wireSource = null
     }
     Column(modifier.border(BorderWidth, UiBorder)) {
         Row(Modifier.fillMaxWidth().height(ToolbarHeight).horizontalScroll(rememberScrollState())) {
@@ -73,7 +74,15 @@ internal fun GraphWorkbench(state: EditorUiState, viewModel: EditorViewModel, mo
             ToolCell(if (inspector) "GRAPH" else "INSPECT", 8 * F, active = inspector) { inspector = !inspector }
             ToolCell("FIT", 5 * F) { fitRequest++; inspector = false }
             ToolCell("ARRANGE", 8 * F) { viewModel.arrangeNodes(); fitRequest++ }
-            ToolCell("FINAL", 6 * F, active = state.viewerNodeId == null) { viewModel.viewNode(null) }
+            Box {
+                ToolCell("EXPORT: ${graph.exportTargets().getValue(graph.selectedOutputId).name}", 18 * F,
+                    active = state.viewerNodeId == null) { outputsMenu = true }
+                DropdownMenu(outputsMenu, onDismissRequest = { outputsMenu = false }) {
+                    graph.exportTargets().forEach { (id, output) ->
+                        DropdownMenuItem(text = { Text(output.name) }, onClick = { outputsMenu = false; viewModel.selectOutput(id) })
+                    }
+                }
+            }
             ToolCell("EXAMPLE", 8 * F) { example = true }
             ToolCell("IMAGE SETTINGS", 13 * F, onClick = onImageSettings)
         }
@@ -100,7 +109,7 @@ internal fun GraphWorkbench(state: EditorUiState, viewModel: EditorViewModel, mo
         }
     }
     if (example) AlertDialog(onDismissRequest = { example = false }, title = { Text("Load branching example?") },
-        text = { Text("Replace this graph with two image branches, an edge mask and a Mix node. Your source stays in place. Undo restores the previous graph.") },
+        text = { Text("Replace this graph with two image branches, an edge mask and a Mix node. Your images stay in place. With a second image, it feeds the posterised branch. Named image and mask outputs are included. Undo restores the previous graph.") },
         confirmButton = { TextButton(onClick = { example = false; viewModel.createBranchExample(); fitRequest++; inspector = false }) { Text("LOAD") } },
         dismissButton = { TextButton(onClick = { example = false }) { Text("CANCEL") } })
 }
@@ -112,7 +121,7 @@ private fun NodeCanvas(
 ) {
     val graph = state.project.processingGraph()
     val nodes = state.project.effects.associateBy { it.id }
-    val ids = listOf(SOURCE_NODE_ID) + nodes.keys
+    val ids = state.project.nodeIds()
     val density = LocalDensity.current.density
     var zoom by remember { mutableFloatStateOf(0.8f) }
     var pan by remember { mutableStateOf(Offset(20f, 20f)) }
@@ -121,7 +130,7 @@ private fun NodeCanvas(
         ?: NodePosition(24f + (ids.indexOf(id) % 8) * 280f, 40f + (ids.indexOf(id) / 8) * 240f)
     fun inputs(id: String) = nodes[id]?.let { GraphPorts.inputs(GraphPorts.type(it)).keys.toList() }.orEmpty()
     fun nodeHeight(id: String) = 42f + (inputs(id).size + 1) * 40f
-    fun portColour(id: String) = if (GraphRules.outputType(id, state.project.effects) == PortType.MASK) MaskWire else ImageWire
+    fun portColour(id: String) = if (GraphRules.outputType(id, state.project.effects, graph) == PortType.MASK) MaskWire else ImageWire
     BoxWithConstraints(modifier.background(Color(0xFF171A1E)).clipToBounds()) {
         val width = maxWidth.value; val height = maxHeight.value
         LaunchedEffect(fitRequest, width, height, ids) {
@@ -161,8 +170,8 @@ private fun NodeCanvas(
             key(id) {
                 val pos = position(id)
                 val selected = state.selectedEffectId == id
-                val target = graph.outputNodeId == id
-                val viewing = (state.viewerNodeId ?: graph.outputNodeId) == id
+                val target = graph.exportEndpoint().nodeId == id
+                val viewing = (state.viewerNodeId ?: graph.exportEndpoint().nodeId) == id
                 val node = nodes[id]
                 Box(Modifier.offset { IntOffset((pan.x + pos.x * density * zoom).roundToInt(), (pan.y + pos.y * density * zoom).roundToInt()) }
                     .wrapContentSize(Alignment.TopStart, unbounded = true)
@@ -200,8 +209,8 @@ private fun NodeCanvas(
                         Row(Modifier.fillMaxWidth().height(40.dp).background(if (wireSource == id) UiMuted else UiBackground)
                             .clickable { onOutput(id) }.semantics { contentDescription = "Connect output of ${nodeName(id, state)}" }
                             .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
-                            Text("${GraphRules.outputType(id, state.project.effects)} OUT  ", fontSize = 11.sp)
-                            Text("●", color = if (GraphRules.outputType(id, state.project.effects) == PortType.MASK) MaskSocket else ImageSocket, fontSize = 18.sp)
+                            Text("${GraphRules.outputType(id, state.project.effects, graph)} OUT  ", fontSize = 11.sp)
+                            Text("●", color = if (GraphRules.outputType(id, state.project.effects, graph) == PortType.MASK) MaskSocket else ImageSocket, fontSize = 18.sp)
                         }
                     }
                 }
@@ -217,6 +226,9 @@ private fun NodeCanvas(
 
 @Composable
 internal fun NodeInspector(state: EditorUiState, viewModel: EditorViewModel) {
+    var naming by remember { mutableStateOf(false) }
+    var outputName by remember { mutableStateOf("") }
+    var editingOutputId by remember { mutableStateOf<String?>(null) }
     val selected = state.selectedEffectId
     val node = state.project.effects.firstOrNull { it.id == selected }
     val graph = state.project.processingGraph()
@@ -226,8 +238,16 @@ internal fun NodeInspector(state: EditorUiState, viewModel: EditorViewModel) {
             QuietMessage("TAP A NODE HEADER, THEN INSPECT. SELECT SOURCE BEFORE ADDING A PARALLEL BRANCH.")
         } else {
             PartitionButton("VIEW THIS OUTPUT", active = state.viewerNodeId == selected) { viewModel.viewNode(selected) }
-            if (GraphRules.outputType(selected, state.project.effects) == PortType.IMAGE) {
+            if (GraphRules.outputType(selected, state.project.effects, graph) == PortType.IMAGE) {
                 PartitionButton("SET AS FINAL EXPORT", active = graph.outputNodeId == selected) { viewModel.setOutput(selected) }
+            }
+            PartitionButton("SAVE NAMED OUTPUT") { editingOutputId = null; outputName = ""; naming = true }
+            graph.outputs.filterValues { it.endpoint.nodeId == selected }.forEach { (id, output) ->
+                PartitionButton("EXPORT: ${output.name}", active = graph.selectedOutputId == id) { viewModel.selectOutput(id) }
+                Row {
+                    TextButton(onClick = { editingOutputId = id; outputName = output.name; naming = true }) { Text("RENAME") }
+                    TextButton(onClick = { viewModel.removeOutput(id) }) { Text("REMOVE OUTPUT") }
+                }
             }
             if (node != null) {
                 GraphPorts.inputs(GraphPorts.type(node)).forEach { (input, type) ->
@@ -236,8 +256,8 @@ internal fun NodeInspector(state: EditorUiState, viewModel: EditorViewModel) {
                     Box {
                         PartitionButton("${input.uppercase()} ← ${upstream?.let { nodeName(it, state) } ?: "DISCONNECTED"}") { choices = true }
                         DropdownMenu(choices, onDismissRequest = { choices = false }) {
-                            val candidates = (listOf(SOURCE_NODE_ID) + state.project.effects.map { it.id }).filter {
-                                it != node.id && GraphRules.outputType(it, state.project.effects) == type
+                            val candidates = state.project.nodeIds().filter {
+                                it != node.id && GraphRules.outputType(it, state.project.effects, graph) == type
                             }
                             candidates.forEach { id -> DropdownMenuItem(text = { Text(nodeName(id, state) + " · " + id.takeLast(5)) }, onClick = {
                                 choices = false; viewModel.connect(id, node.id, input)
@@ -253,9 +273,21 @@ internal fun NodeInspector(state: EditorUiState, viewModel: EditorViewModel) {
                 }
                 ParameterPanel(node, BuiltInEffects.registry.definition(node.type).takeIf { node.isResolved }, viewModel)
                 PartitionButton("DELETE NODE") { viewModel.remove(node.id) }
-            } else QuietMessage("ONE RETAINED SOURCE CAN FEED ANY NUMBER OF IMAGE INPUTS.")
+            } else {
+                val asset = state.project.sourceAsset(selected)
+                QuietMessage(asset?.let { "${it.displayName ?: "Retained image"} · ${it.width} × ${it.height}" }
+                    ?: "IMAGE MISSING. USE REPLACE IMAGE TO RELINK THIS SOURCE.")
+                QuietMessage("REPLACE IMAGE CHANGES THIS SELECTED SOURCE. + IMAGE ADDS AN INDEPENDENT SOURCE.")
+                if (selected != SOURCE_NODE_ID) PartitionButton("DELETE IMAGE NODE") { viewModel.remove(selected) }
+            }
         }
-        QuietMessage("F = FINAL EXPORT · V = VIEWER. VIEWING A MASK DOES NOT CHANGE EXPORT.")
+        QuietMessage("F = SELECTED EXPORT · V = VIEWER. USE SAVE NAMED OUTPUT TO EXPORT AN IMAGE OR MASK.")
         state.warnings.forEach { QuietMessage(it) }
     }
+    if (naming && selected != null) AlertDialog(onDismissRequest = { naming = false }, title = { Text("Name this output") },
+        text = { OutlinedTextField(outputName, onValueChange = { outputName = it.take(80) }, label = { Text("Output name") }, singleLine = true) },
+        confirmButton = { TextButton(enabled = outputName.isNotBlank(), onClick = {
+            if (viewModel.saveOutput(outputName, selected, editingOutputId)) naming = false
+        }) { Text("SAVE") } },
+        dismissButton = { TextButton(onClick = { naming = false }) { Text("CANCEL") } })
 }

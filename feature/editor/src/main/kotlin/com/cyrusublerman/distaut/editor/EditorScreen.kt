@@ -36,6 +36,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
+import com.cyrusublerman.distaut.model.*
+
 internal enum class SidebarMode {
     NODES,
     CANVAS,
@@ -54,11 +56,15 @@ fun EditorRoute(viewModel: EditorViewModel = viewModel()) {
     var mode by rememberSaveable { mutableStateOf(SidebarMode.NODES) }
     var debug by rememberSaveable { mutableStateOf(false) }
 
+    var replacementNode by rememberSaveable { mutableStateOf(SOURCE_NODE_ID) }
+    val additionalImagePicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let { viewModel.importSource(it, additional = true) }
+    }
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
         if (uri == null) DiagnosticsLog.info("import", "Picker closed")
-        else viewModel.importSource(uri)
+        else viewModel.importSource(uri, replacementNode)
     }
     val projectSaver = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip"),
@@ -90,17 +96,19 @@ fun EditorRoute(viewModel: EditorViewModel = viewModel()) {
         },
         setDebug = { debug = it },
         pickImage = {
+            replacementNode = state.selectedEffectId?.takeIf { it in state.project.processingGraph().sources } ?: SOURCE_NODE_ID
             imagePicker.launch(
                 PickVisualMediaRequest(
                     ActivityResultContracts.PickVisualMedia.ImageOnly,
                 )
             )
         },
+        addImage = { additionalImagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
         saveProject = { projectSaver.launch("distaut-project.distaut") },
         openProject = {
             projectOpener.launch(arrayOf("application/zip", "application/octet-stream", "application/json", "text/plain"))
         },
-        saveRecipe = { recipeSaver.launch("distaut-recipe-v4.json") },
+        saveRecipe = { recipeSaver.launch("distaut-recipe-v5.json") },
         openRecipe = {
             recipeOpener.launch(arrayOf("application/json", "text/plain"))
         },
@@ -121,6 +129,7 @@ private fun DistautScreen(
     setMode: (SidebarMode) -> Unit,
     setDebug: (Boolean) -> Unit,
     pickImage: () -> Unit,
+    addImage: () -> Unit,
     saveProject: () -> Unit,
     openProject: () -> Unit,
     saveRecipe: () -> Unit,
@@ -139,6 +148,7 @@ private fun DistautScreen(
                 state,
                 debug,
                 pickImage,
+                addImage,
                 saveProject,
                 openProject,
                 saveRecipe,
@@ -166,6 +176,7 @@ private fun Toolbar(
     state: EditorUiState,
     debug: Boolean,
     pickImage: () -> Unit,
+    addImage: () -> Unit,
     saveProject: () -> Unit,
     openProject: () -> Unit,
     saveRecipe: () -> Unit,
@@ -177,20 +188,21 @@ private fun Toolbar(
     var toolsOpen by rememberSaveable { mutableStateOf(false) }
     val idle = !state.operationInProgress
     Row(Modifier.fillMaxWidth().height(ToolbarHeight).horizontalScroll(rememberScrollState())) {
-        ToolCell(state.project.source?.displayName ?: "OPEN IMAGE", 12 * F, enabled = idle, alignStart = true, onClick = pickImage)
+        ToolCell(if (state.project.source == null) "OPEN IMAGE" else "REPLACE IMAGE", 12 * F, enabled = idle, alignStart = true, onClick = pickImage)
+        ToolCell("+ IMAGE", 8 * F, enabled = idle && state.project.processingGraph().sources.size < GraphRules.MAX_SOURCES, onClick = addImage)
         ToolCell("OPEN", 5 * F, enabled = idle, onClick = openProject)
         ToolCell("SAVE", 5 * F, enabled = idle, onClick = saveProject)
         ToolCell("UNDO", 5 * F, state.canUndo && idle, onClick = viewModel::undo)
         ToolCell("REDO", 5 * F, state.canRedo && idle, onClick = viewModel::redo)
         ToolCell(if (state.showSource) "SOURCE" else "OUTPUT", 6 * F,
             enabled = state.sourceBitmap != null, active = state.showSource) { viewModel.setShowSource(!state.showSource) }
-        ToolCell("EXPORT", 6 * F, enabled = state.project.source != null && idle, onClick = exportPng)
+        ToolCell("EXPORT", 6 * F, enabled = state.project.allAssets().isNotEmpty() && idle, onClick = exportPng)
         Box {
             ToolCell("TOOLS", 6 * F, onClick = { toolsOpen = true })
             DropdownMenu(expanded = toolsOpen, onDismissRequest = { toolsOpen = false }) {
                 DropdownMenuItem(text = { Text("Load recipe") }, enabled = idle, onClick = { toolsOpen = false; openRecipe() })
                 DropdownMenuItem(text = { Text("Save recipe") }, enabled = idle, onClick = { toolsOpen = false; saveRecipe() })
-                DropdownMenuItem(text = { Text("Relink / replace source") }, enabled = idle, onClick = { toolsOpen = false; pickImage() })
+                DropdownMenuItem(text = { Text("Relink / replace selected image") }, enabled = idle, onClick = { toolsOpen = false; pickImage() })
                 DropdownMenuItem(text = { Text("Diagnostics") }, onClick = { toolsOpen = false; setDebug(!debug) })
             }
         }

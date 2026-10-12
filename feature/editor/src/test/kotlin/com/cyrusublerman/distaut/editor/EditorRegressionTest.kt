@@ -7,6 +7,7 @@ import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
+import com.cyrusublerman.distaut.model.*
 import com.cyrusublerman.distaut.model.ParameterValue
 import com.cyrusublerman.distaut.model.NodePosition
 import com.cyrusublerman.distaut.model.SOURCE_NODE_ID
@@ -137,6 +138,34 @@ class EditorRegressionTest {
         assertSame(original.renderedBitmap, vm.settled().renderedBitmap)
         vm.undo()
         assertSame(original.renderedBitmap, vm.settled().renderedBitmap)
+    }
+    @Test fun twoSourcesNamedExportsRelinkUndoAndPortableReopen() = runBlocking {
+        val vm = editor(); vm.settled()
+        vm.importSource(source("first.png", Color.RED)); vm.settled()
+        vm.importSource(source("second.png", Color.BLUE), additional = true)
+        val added = vm.settled()
+        assertEquals(null, added.error)
+        assertEquals(2, added.project.processingGraph().sources.size)
+        assertEquals(Color.RED, added.sourceBitmap!!.getPixel(0,0))
+        assertEquals(Color.BLUE, added.renderedBitmap!!.getPixel(0,0))
+        val id = added.selectedEffectId!!
+        vm.saveOutput("Blue image", id); vm.settled()
+        val target = vm.uiState.value.project.processingGraph().selectedOutputId
+        vm.viewNode(SOURCE_NODE_ID); vm.settled()
+        val output = File(app.cacheDir, "named.png")
+        vm.exportPng(Uri.fromFile(output)); assertEquals(null, vm.settled().error)
+        val bitmap = android.graphics.BitmapFactory.decodeFile(output.path)
+        assertEquals(Color.BLUE, bitmap.getPixel(0,0)); bitmap.recycle()
+        vm.importSource(source("replacement.png", Color.GREEN), id); vm.settled()
+        vm.undo(); assertEquals(Color.BLUE, vm.settled().renderedBitmap!!.getPixel(0,0))
+        val project = File(app.cacheDir, "two.distaut")
+        vm.saveProject(Uri.fromFile(project)); assertEquals(null, vm.settled().error)
+        vm.remove(id); vm.settled()
+        vm.openProject(Uri.fromFile(project)); val reopened = vm.settled()
+        assertEquals(null, reopened.error)
+        assertEquals(2, reopened.project.allAssets().size)
+        assertEquals(target, reopened.project.processingGraph().selectedOutputId)
+        assertEquals(Color.BLUE, reopened.renderedBitmap!!.getPixel(0,0))
     }
     @Test fun fallbackDecoderRotatesPixelsAndDocumentDimensions() = runBlocking {
         val file = File(app.cacheDir, "oriented.jpg")

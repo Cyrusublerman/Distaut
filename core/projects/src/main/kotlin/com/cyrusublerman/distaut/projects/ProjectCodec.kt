@@ -1,6 +1,6 @@
 package com.cyrusublerman.distaut.projects
 
-import com.cyrusublerman.distaut.model.ProjectState
+import com.cyrusublerman.distaut.model.*
 import com.cyrusublerman.distaut.model.SourceAsset
 import com.cyrusublerman.distaut.recipes.GraphJsonCodec
 import com.cyrusublerman.distaut.recipes.EffectJsonCodec
@@ -13,18 +13,22 @@ import com.cyrusublerman.distaut.recipes.asObjectOrNull
 import com.cyrusublerman.distaut.recipes.asStringOrNull
 
 data class ProjectDocument(
-    val schemaVersion: Int = 3,
+    val schemaVersion: Int = 4,
     val engineVersion: String,
     val savedAtEpochMillis: Long,
     val project: ProjectState,
-) { init { require(project.graph == null || schemaVersion >= 3) { "Graph projects require schema 3" } } }
+) { init {
+    require(project.graph == null || schemaVersion >= 3) { "Graph projects require schema 3" }
+    require(schemaVersion >= 4 || (project.assets.isEmpty() && project.processingGraph().sources == ProcessingGraph().sources && project.processingGraph().outputs.isEmpty())) { "Multiple assets and outputs require project schema 4" }
+} }
 
 object ProjectCodec {
     fun encode(document: ProjectDocument, pretty: Boolean = true): String {
         val source = document.project.source?.let(::encodeSource) ?: JsonValue.NullValue
         val project = JsonValue.Object(
             "schemaVersion" to JsonValue.NumberValue(document.project.schemaVersion.toString()),
-            "source" to source,
+            "source" to (if (document.schemaVersion < 4) source else JsonValue.NullValue),
+            "assets" to JsonValue.Object(LinkedHashMap(document.project.allAssets().mapValues { encodeSource(it.value) })),
             "effects" to JsonValue.Array(document.project.effects.map(EffectJsonCodec::encode)),
             "graph" to GraphJsonCodec.encode(document.project.graph),
             "soloEffectId" to document.project.soloEffectId.jsonStringOrNull(),
@@ -47,7 +51,7 @@ object ProjectCodec {
             ?: error("Project root must be a JSON object")
         val schema = root["schemaVersion"].asNumberOrNull()?.asIntExact()
             ?: error("Project schemaVersion is required")
-        require(schema in 1..3) { "Unsupported project schema: $schema" }
+        require(schema in 1..4) { "Unsupported project schema: $schema" }
         val projectObject = root["project"].asObjectOrNull()
             ?: error("Project state is required")
         val effects = projectObject["effects"].asArrayOrNull()?.values
@@ -55,15 +59,21 @@ object ProjectCodec {
             ?: emptyList()
         val solo = projectObject["soloEffectId"].asStringOrNull()
             ?.takeIf { id -> effects.any { it.id == id } }
+        val assets = projectObject["assets"].asObjectOrNull()?.values?.mapValues { (_, value) ->
+            decodeSource(value.asObjectOrNull() ?: error("Asset must be an object"))
+        }.orEmpty()
+        require(assets.size <= GraphRules.MAX_SOURCES) { "Too many source assets" }
         val project = ProjectState(
             schemaVersion = projectObject["schemaVersion"].asNumberOrNull()?.asIntExact() ?: 1,
-            source = projectObject["source"].asObjectOrNull()?.let(::decodeSource),
+            source = if (schema >= 4) assets[PRIMARY_ASSET_ID] else projectObject["source"].asObjectOrNull()?.let(::decodeSource),
+            assets = assets - PRIMARY_ASSET_ID,
             effects = effects,
             graph = GraphJsonCodec.decode(projectObject["graph"], effects),
             soloEffectId = solo,
             globalSeed = projectObject["globalSeed"].asNumberOrNull()?.asLongExact() ?: 42L,
             revision = projectObject["revision"].asNumberOrNull()?.asLongExact() ?: 0L,
         )
+        require(project.assets.keys.all { it.matches(Regex("[A-Za-z0-9_-]{1,100}")) }) { "Invalid asset ID" }
         return ProjectDocument(
             schemaVersion = schema,
             engineVersion = root["engineVersion"].asStringOrNull() ?: "unknown",

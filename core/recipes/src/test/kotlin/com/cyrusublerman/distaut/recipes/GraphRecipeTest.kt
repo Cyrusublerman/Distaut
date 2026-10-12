@@ -10,7 +10,7 @@ class GraphRecipeTest {
         val graph = GraphRules.chain(listOf(a, b)).copy(positions = mapOf(a.id to NodePosition(-32f, 900f)))
         val state = ProjectState(effects = listOf(a, b), graph = graph)
         val recipe = RecipeMapper.fromProject(state, "test")
-        assertEquals(4, recipe.schemaVersion)
+        assertEquals(5, recipe.schemaVersion)
         assertEquals(recipe, RecipeCodec.decode(RecipeCodec.encode(recipe), setOf("invert")))
     }
     @Test fun legacyRecipeMigratesToConnectedChainWithoutVersionChanges() {
