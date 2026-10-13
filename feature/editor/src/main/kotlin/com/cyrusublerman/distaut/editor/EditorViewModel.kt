@@ -263,7 +263,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             history.replace(document.project.copy(graph = document.project.processingGraph(), soloEffectId = null))
             clearBinding()
             publishHistoryState()
-            _uiState.update { it.copy(fullDetail = false, saved = true, warnings = emptyList()) }
+            _uiState.update { it.copy(fullDetail = false, saved = true, warnings = emptyList(), viewerNodeId = null, showSource = false) }
             scheduleAutosave()
             loadCurrentSource(ticket)
         }
@@ -279,7 +279,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             history.replace(RecipeMapper.applyToProject(imported.recipe, history.current), clearHistory = false)
             val warnings = imported.warnings + history.current.effects.filter { !it.isResolved }
                 .map { "${it.id}: ${it.type} is preserved but disabled; an explicit migration is required." }
-            _uiState.update { it.copy(warnings = warnings.distinct(), saved = false) }
+            _uiState.update { it.copy(warnings = warnings.distinct(), saved = false, viewerNodeId = null, showSource = false) }
             publishHistoryState()
             scheduleRender()
             scheduleAutosave()
@@ -364,7 +364,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 block(ticket)
                 ensureActive()
                 if (ticket == sourceGeneration) {
-                    _uiState.update { it.copy(operationInProgress = false, message = "READY") }
+                    _uiState.update { it.copy(operationInProgress = false, rendering = true, message = "READY") }
                     scheduleRender()
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -448,7 +448,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private fun scheduleRender(debounceMillis: Long = 0) {
         val project = history.current
         val viewer = _uiState.value.viewerNodeId
-        if (renderedProject?.let { sameRenderInputs(it, project) } == true && renderedViewer == viewer && !_uiState.value.stalePreview && !exporting) return
+        if (renderedProject?.let { sameRenderInputs(it, project) } == true && renderedViewer == viewer && !_uiState.value.stalePreview && !exporting) {
+            _uiState.update { it.copy(rendering = false) }
+            return
+        }
         val asset = project.source
         val ticket = previewGeneration.incrementAndGet()
         renderJob?.cancel()
@@ -527,7 +530,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             try { block(); _uiState.update { it.copy(message = success) } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { failOperation(start, error) }
-            finally { _uiState.update { it.copy(operationInProgress = false) }; scheduleRender() }
+            finally { _uiState.update { it.copy(operationInProgress = false, rendering = true) }; scheduleRender() }
         }
     }
     private fun failOperation(prefix: String, error: Throwable) {

@@ -30,7 +30,7 @@ class KotlinGraphRenderer : RenderBackend {
         val provided = mapOf(SOURCE_NODE_ID to request.source) + request.sources
         val inputValues = needed.associateWith { id ->
             val pixels = provided[id] ?: error("Source ${graph.sources.getValue(id).label} is missing; relink this source")
-            Value.Image(pixels, request.sourceDimensions[id] ?: ImageDimensions(request.documentWidth, request.documentHeight))
+            Value.Image(pixels, request.sourceDimensions[id] ?: if (id == SOURCE_NODE_ID) ImageDimensions(request.documentWidth, request.documentHeight) else ImageDimensions(pixels.width, pixels.height))
         }
         val largest = inputValues.values.maxOfOrNull { it.pixels.rgba.size.toLong() } ?: request.source.rgba.size.toLong()
         val live = needed.toMutableSet(); val remaining = uses.toMutableMap(); var peak = live.size
