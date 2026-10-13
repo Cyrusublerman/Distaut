@@ -112,7 +112,8 @@ object ProjectReducer {
                 val graph = state.processingGraph()
                 require(command.nodeId !in state.nodeIds() && command.assetId !in state.allAssets()) { "Source already exists" }
                 val nextGraph = graph.copy(sources = graph.sources + (command.nodeId to GraphSource(command.assetId, command.label)),
-                    positions = graph.positions + (command.nodeId to NodePosition(24f, 40f + graph.sources.size * 180f)))
+                    positions = graph.positions + (command.nodeId to NodePosition(24f,
+                        ((graph.sources.keys.maxOfOrNull { graph.positions[it]?.y ?: 40f } ?: 40f) + 180f).coerceAtMost(9800f))))
                 GraphRules.validate(state.effects, nextGraph)
                 state.copy(graph = nextGraph, assets = state.assets + (command.assetId to command.asset))
             }

@@ -49,6 +49,21 @@ class MultiSourceRenderingTest {
         assertContentEquals(primaryOnly.source.rgba, KotlinGraphRenderer().render(primaryOnly).output.rgba)
         assertFails { KotlinGraphRenderer().render(request().copy(sources = emptyMap())) }
     }
+    @Test fun memoryBudgetIncludesRequestOwnedSourcesAfterTheirLastConsumer() {
+        val ids = listOf(SOURCE_NODE_ID, "b", "c", "d")
+        val sources = ProcessingGraph().sources + ids.drop(1).associateWith { GraphSource("asset-$it") }
+        val inversions = ids.indices.map { BuiltInEffects.Invert.instantiate("invert-$it") }
+        val mixes = listOf("ab", "cd", "all").map { BuiltInEffects.Mix.instantiate(it) }
+        val edges = ids.mapIndexed { i, id -> GraphConnection(id, "invert-$i", "image") } + listOf(
+            GraphConnection("invert-0", "ab", "a"), GraphConnection("invert-1", "ab", "b"),
+            GraphConnection("invert-2", "cd", "a"), GraphConnection("invert-3", "cd", "b"),
+            GraphConnection("ab", "all", "a"), GraphConnection("cd", "all", "b"))
+        val graph = ProcessingGraph(sources = sources, connections = edges, outputNodeId = "all")
+        val request = RenderRequest(1,1,solid(1,1,0,0,0), inversions + mixes, RenderQuality.FINAL,42,
+            graph = graph, sources = ids.associateWith { solid(1,1,0,0,0) }, workingMemoryBudgetBytes = 13L * 4)
+        assertFailsWith<IllegalArgumentException> { KotlinGraphRenderer().render(request) }
+        assertEquals(1, KotlinGraphRenderer().render(request.copy(workingMemoryBudgetBytes = 14L * 4)).output.width)
+    }
     @Test fun legacyMixRetainsPixelsAndRequiresExplicitUpgradeForDifferentSizes() {
         val old = request().copy(effects = request().effects.map { it.copy(algorithmVersion = "associated-mix-v1") })
         assertFailsWith<IllegalArgumentException> { KotlinGraphRenderer().render(old) }

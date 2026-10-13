@@ -33,7 +33,9 @@ class KotlinGraphRenderer : RenderBackend {
             Value.Image(pixels, request.sourceDimensions[id] ?: if (id == SOURCE_NODE_ID) ImageDimensions(request.documentWidth, request.documentHeight) else ImageDimensions(pixels.width, pixels.height))
         }
         val largest = inputValues.values.maxOfOrNull { it.pixels.rgba.size.toLong() } ?: request.source.rgba.size.toLong()
-        val live = needed.toMutableSet(); val remaining = uses.toMutableMap(); var peak = live.size
+        // Request-owned source buffers remain alive even after their last graph consumer.
+        val sourceBytes = inputValues.values.sumOf { it.pixels.rgba.size.toLong() }
+        val live = mutableSetOf<String>(); val remaining = uses.toMutableMap(); var peak = 0
         order.forEach { id ->
             live += id; peak = maxOf(peak, live.size)
             GraphRules.dependencies(nodes.getValue(id), graph).forEach { parent ->
@@ -41,7 +43,7 @@ class KotlinGraphRenderer : RenderBackend {
                 if (remaining[parent] == 0) live -= parent
             }
         }
-        val required = largest * (peak + 6)
+        val required = sourceBytes + largest * (peak + 6)
         require(required <= request.workingMemoryBudgetBytes) {
             "Graph needs about ${required / 1048576} MiB working memory; reduce image or export size"
         }

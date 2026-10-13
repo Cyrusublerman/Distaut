@@ -91,7 +91,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 }
                 _uiState.update { it.copy(selectedEffectId = id, viewerNodeId = id) }
                 publishHistoryState()
-                _uiState.update { it.copy(fullDetail = false, saved = false) }
+                _uiState.update { it.copy(fullDetail = if (id == SOURCE_NODE_ID) false else it.fullDetail, saved = false) }
                 scheduleAutosave()
             } finally { if (!retained) loaded.bitmap.recycle() }
         }
@@ -156,7 +156,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             SOURCE_NODE_ID to NodePosition(24f, 260f), poster.id to NodePosition(304f, 24f),
             blur.id to NodePosition(304f, 260f), mask.id to NodePosition(304f, 496f), mix.id to NodePosition(604f, 240f),
         ) + sources.keys.filter { it != SOURCE_NODE_ID }.mapIndexed { index, id ->
-            id to NodePosition(24f, 24f + index * 240f)
+            id to NodePosition(24f, if (index == 0) 24f else 260f + index * 240f)
         }.toMap(), outputs = mapOf("mask" to GraphOutput("Edge mask", PortRef(mask.id)),
             "poster" to GraphOutput("Posterised", PortRef(poster.id))))
         if (dispatchGraph(EditorCommand.ReplaceGraph(nodes, graph))) {

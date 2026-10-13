@@ -1,6 +1,6 @@
 # Implementation status
 
-Updated: 2026-10-12. Branch: `feat/multi-source-outputs`.
+Updated: 2026-10-13. Branch: `feat/multi-source-outputs`.
 
 ## Node graph implemented
 
@@ -10,7 +10,7 @@ Updated: 2026-10-12. Branch: `feat/multi-source-outputs`.
 - The viewer can inspect any image or mask. Export independently follows the selected named image or mask output.
 - Connections, parameters, node positions, removal, output changes and the branching example are undoable. Missing sockets are permitted while authoring and reported when a requested output depends on them.
 - Recipe v5 and project manifest v4 preserve topology and positions. Legacy ordered documents migrate to chains without upgrading their pixel algorithms.
-- Graph memory preflight accounts for peak live branches plus scratch space. Cycles, incompatible ports, dangling references and unknown output ports are rejected.
+- Graph memory preflight accounts for all request-owned source buffers, peak live branches and scratch space. Cycles, incompatible ports, dangling references and unknown output ports are rejected.
 - CI verifies the APK signature and native library alignment in addition to tests, lint and assembly.
 
 ## Multi-source milestone
