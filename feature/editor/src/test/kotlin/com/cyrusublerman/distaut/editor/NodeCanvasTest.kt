@@ -11,7 +11,7 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelStore
 import androidx.test.core.app.ApplicationProvider
-import com.cyrusublerman.distaut.model.SOURCE_NODE_ID
+import com.cyrusublerman.distaut.model.*
 import java.io.File
 import org.junit.After
 import org.junit.Before
@@ -101,6 +101,23 @@ class NodeCanvasTest {
         assertTrue(movement in 30f..90f, "Node should track finger at fitted zoom; moved $movement px")
         compose.runOnIdle { vm.undo() }; settle()
         assertEquals(before, vm.uiState.value.project.graph!!.positions[SOURCE_NODE_ID])
+    }
+    @Test fun secondImageCardAndNamedOutputControlsAreUsable() {
+        val app = ApplicationProvider.getApplicationContext<Application>()
+        val file = File(app.cacheDir, "second-ui-source.png")
+        val bitmap = Bitmap.createBitmap(80, 120, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(Color.BLUE)
+        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        bitmap.recycle()
+        compose.runOnIdle { vm.importSource(Uri.fromFile(file), additional = true) }; settle()
+        compose.onNodeWithContentDescription("Move or select IMAGE 2").assertIsDisplayed()
+        compose.onNodeWithText("SAVE NAMED OUTPUT").performScrollTo().performClick()
+        compose.onNodeWithText("Output name").performTextInput("Second image")
+        compose.onAllNodesWithText("SAVE").onLast().performClick()
+        settle()
+        assertEquals("Second image", vm.uiState.value.project.processingGraph().exportTargets()
+            .getValue(vm.uiState.value.project.processingGraph().selectedOutputId).name)
+        capture("multi-source-named-output")
     }
     @Test @Config(qualifiers = "w600dp-h960dp-mdpi")
     fun narrowLayoutCanInspectMasksAndReturnToCanvas() {

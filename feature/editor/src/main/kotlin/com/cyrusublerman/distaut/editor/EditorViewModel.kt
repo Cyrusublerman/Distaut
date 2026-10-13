@@ -24,7 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-private const val ENGINE_VERSION = "0.5.0-dev"
+private const val ENGINE_VERSION = "0.6.0-dev"
 
 data class EditorUiState(
     val project: ProjectState = ProjectState(),
@@ -71,7 +71,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
 
     init { restoreAutosave() }
 
-    fun importSource(uri: Uri) {
+    fun importSource(uri: Uri, nodeId: String = SOURCE_NODE_ID, additional: Boolean = false) {
         interactionEpoch++
         launchSourceOperation("IMPORTING IMAGE") { ticket ->
             val loaded = sourceLoader.importSource(uri)
@@ -80,11 +80,18 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 val pixels = withContext(Dispatchers.Default) { loaded.bitmap.toPixelBuffer() }
                 if (ticket != sourceGeneration) return@launchSourceOperation
                 history.endTransaction()
-                history.dispatch(EditorCommand.SetSource(loaded.asset))
-                bind(loaded.asset, loaded.bitmap, pixels)
-                retained = true
+                val adding = additional && history.current.source != null
+                val id = if (adding) UUID.randomUUID().toString() else nodeId
+                if (adding) history.dispatch(EditorCommand.AddSource(id, UUID.randomUUID().toString(), loaded.asset,
+                    "IMAGE ${history.current.processingGraph().sources.size + 1}"))
+                else history.dispatch(EditorCommand.ReplaceSource(id, loaded.asset))
+                if (id == SOURCE_NODE_ID) {
+                    bind(loaded.asset, loaded.bitmap, pixels)
+                    retained = true
+                }
+                _uiState.update { it.copy(selectedEffectId = id, viewerNodeId = id) }
                 publishHistoryState()
-                _uiState.update { it.copy(fullDetail = false, saved = false) }
+                _uiState.update { it.copy(fullDetail = if (id == SOURCE_NODE_ID) false else it.fullDetail, saved = false) }
                 scheduleAutosave()
             } finally { if (!retained) loaded.bitmap.recycle() }
         }
@@ -103,6 +110,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         scheduleRender()
     }
     fun setOutput(id: String) { if (dispatchGraph(EditorCommand.SetGraphOutput(id))) viewNode(null) }
+    fun saveOutput(name: String, nodeId: String, outputId: String? = null): Boolean {
+        val saved = dispatchGraph(EditorCommand.SaveOutput(outputId ?: UUID.randomUUID().toString(), name, PortRef(nodeId)))
+        if (saved) viewNode(null)
+        return saved
+    }
+    fun selectOutput(id: String) { if (dispatchGraph(EditorCommand.SelectOutput(id))) viewNode(null) }
+    fun removeOutput(id: String) { if (dispatchGraph(EditorCommand.RemoveOutput(id))) viewNode(null) }
     fun connect(from: String, to: String, input: String): Boolean = dispatchGraph(EditorCommand.Connect(from, to, input))
     fun disconnect(to: String, input: String) { dispatchGraph(EditorCommand.Disconnect(to, input)) }
     fun positionNode(id: String, position: NodePosition) {
@@ -115,12 +129,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
     fun arrangeNodes() {
         val graph = history.current.processingGraph()
-        val levels = mutableMapOf(SOURCE_NODE_ID to 0)
+        val levels = graph.sources.keys.associateWith { 0 }.toMutableMap()
         fun level(id: String): Int = levels.getOrPut(id) {
             (graph.connections.filter { it.to == id }.maxOfOrNull { level(it.from) } ?: -1) + 1
         }
         val rows = mutableMapOf<Int, Int>()
-        val positions = (listOf(SOURCE_NODE_ID) + history.current.effects.map { it.id }).associateWith { id ->
+        val positions = history.current.nodeIds().associateWith { id ->
             val column = level(id); val row = rows[column] ?: 0; rows[column] = row + 1
             NodePosition((24f + column * 280f).coerceAtMost(9800f), (40f + row * 240f).coerceAtMost(9800f))
         }
@@ -132,14 +146,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val mask = BuiltInEffects.EdgeMask.instantiate(UUID.randomUUID().toString())
         val mix = BuiltInEffects.Mix.instantiate(UUID.randomUUID().toString()).copy(parameters = mapOf("amount" to ParameterValue.Decimal(1.0)))
         val nodes = listOf(poster, blur, mask, mix)
-        val graph = ProcessingGraph(connections = listOf(
-            GraphConnection(SOURCE_NODE_ID, poster.id, "image"), GraphConnection(SOURCE_NODE_ID, blur.id, "image"),
+        val sources = history.current.processingGraph().sources
+        val second = sources.keys.firstOrNull { it != SOURCE_NODE_ID } ?: SOURCE_NODE_ID
+        val graph = ProcessingGraph(sources = sources, connections = listOf(
+            GraphConnection(second, poster.id, "image"), GraphConnection(SOURCE_NODE_ID, blur.id, "image"),
             GraphConnection(SOURCE_NODE_ID, mask.id, "image"), GraphConnection(blur.id, mix.id, "a"),
             GraphConnection(poster.id, mix.id, "b"), GraphConnection(mask.id, mix.id, "mask"),
         ), outputNodeId = mix.id, positions = mapOf(
             SOURCE_NODE_ID to NodePosition(24f, 260f), poster.id to NodePosition(304f, 24f),
             blur.id to NodePosition(304f, 260f), mask.id to NodePosition(304f, 496f), mix.id to NodePosition(604f, 240f),
-        ))
+        ) + sources.keys.filter { it != SOURCE_NODE_ID }.mapIndexed { index, id ->
+            id to NodePosition(24f, if (index == 0) 24f else 260f + index * 240f)
+        }.toMap(), outputs = mapOf("mask" to GraphOutput("Edge mask", PortRef(mask.id)),
+            "poster" to GraphOutput("Posterised", PortRef(poster.id))))
         if (dispatchGraph(EditorCommand.ReplaceGraph(nodes, graph))) {
             _uiState.update { it.copy(selectedEffectId = mix.id, viewerNodeId = null, showSource = false) }
             scheduleRender()
@@ -180,7 +199,10 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         val index = history.current.effects.indexOfFirst { it.id == id }
         if (index >= 0) dispatch(EditorCommand.MoveEffect(id, index + delta))
     }
-    fun remove(id: String) { if (id != SOURCE_NODE_ID) dispatchGraph(EditorCommand.RemoveEffect(id)) }
+    fun remove(id: String) {
+        if (id == SOURCE_NODE_ID) return
+        dispatchGraph(if (id in history.current.processingGraph().sources) EditorCommand.RemoveSource(id) else EditorCommand.RemoveEffect(id))
+    }
     fun select(id: String) = _uiState.update { it.copy(selectedEffectId = id) }
     fun setShowSource(show: Boolean) = _uiState.update { it.copy(showSource = show) }
     fun setCompare(compare: Boolean) = _uiState.update { it.copy(compare = compare) }
@@ -241,7 +263,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             history.replace(document.project.copy(graph = document.project.processingGraph(), soloEffectId = null))
             clearBinding()
             publishHistoryState()
-            _uiState.update { it.copy(fullDetail = false, saved = true, warnings = emptyList()) }
+            _uiState.update { it.copy(fullDetail = false, saved = true, warnings = emptyList(), viewerNodeId = null, showSource = false) }
             scheduleAutosave()
             loadCurrentSource(ticket)
         }
@@ -257,7 +279,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             history.replace(RecipeMapper.applyToProject(imported.recipe, history.current), clearHistory = false)
             val warnings = imported.warnings + history.current.effects.filter { !it.isResolved }
                 .map { "${it.id}: ${it.type} is preserved but disabled; an explicit migration is required." }
-            _uiState.update { it.copy(warnings = warnings.distinct(), saved = false) }
+            _uiState.update { it.copy(warnings = warnings.distinct(), saved = false, viewerNodeId = null, showSource = false) }
             publishHistoryState()
             scheduleRender()
             scheduleAutosave()
@@ -268,7 +290,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         if (_uiState.value.operationInProgress) return
         history.endTransaction()
         val snapshot = history.current
-        val asset = snapshot.source ?: return
+        if (snapshot.allAssets().isEmpty()) return
         val maximum = _uiState.value.exportMaximumDimension
         exporting = true
         previewGeneration.incrementAndGet()
@@ -280,13 +302,12 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 obsolete?.join()
                 withContext(Dispatchers.Default) { renderer.clearCache() }
-                val bitmap = if (maximum == null) sourceLoader.loadFull(asset) else sourceLoader.reopen(asset, maximum)
-                val pixels = try { withContext(Dispatchers.Default) { bitmap.toPixelBuffer() } } finally { bitmap.recycle() }
+                val inputs = prepareSources(snapshot, null, maximum, reusePrimary = false)
                 val context = currentCoroutineContext()
                 val result = withContext(Dispatchers.Default) {
-                    renderer.render(RenderRequest(0, snapshot.revision, pixels, snapshot.effects,
+                    renderer.render(RenderRequest(0, snapshot.revision, inputs.pixels.values.first(), snapshot.effects,
                         RenderQuality.FINAL, snapshot.globalSeed, CancellationProbe { !context.isActive },
-                        asset.width, asset.height, graph = snapshot.processingGraph(),
+                        graph = snapshot.processingGraph(), sources = inputs.pixels, sourceDimensions = inputs.dimensions,
                         workingMemoryBudgetBytes = graphMemoryBudget()))
                 }
                 projectStore.exportPng(uri, result.output)
@@ -343,7 +364,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                 block(ticket)
                 ensureActive()
                 if (ticket == sourceGeneration) {
-                    _uiState.update { it.copy(operationInProgress = false, message = "READY") }
+                    _uiState.update { it.copy(operationInProgress = false, rendering = true, message = "READY") }
                     scheduleRender()
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -400,8 +421,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
     private fun publishHistoryState() {
         _uiState.update { state -> state.copy(project = history.current,
-            selectedEffectId = state.selectedEffectId?.takeIf { id -> id == SOURCE_NODE_ID || history.current.effects.any { it.id == id } },
-            viewerNodeId = state.viewerNodeId?.takeIf { id -> id == SOURCE_NODE_ID || history.current.effects.any { it.id == id } },
+            selectedEffectId = state.selectedEffectId?.takeIf { id -> id in history.current.nodeIds() },
+            viewerNodeId = state.viewerNodeId?.takeIf { id -> id in history.current.nodeIds() },
             canUndo = history.canUndo, canRedo = history.canRedo) }
     }
     private fun scheduleAutosave() {
@@ -427,12 +448,14 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private fun scheduleRender(debounceMillis: Long = 0) {
         val project = history.current
         val viewer = _uiState.value.viewerNodeId
-        if (renderedProject?.let { sameRenderInputs(it, project) } == true && renderedViewer == viewer && !_uiState.value.stalePreview && !exporting) return
+        if (renderedProject?.let { sameRenderInputs(it, project) } == true && renderedViewer == viewer && !_uiState.value.stalePreview && !exporting) {
+            _uiState.update { it.copy(rendering = false) }
+            return
+        }
         val asset = project.source
-        val pixels = sourcePixels
         val ticket = previewGeneration.incrementAndGet()
         renderJob?.cancel()
-        if (asset == null || boundSource != asset || pixels == null || exporting) {
+        if (project.allAssets().isEmpty() || exporting || _uiState.value.operationInProgress) {
             _uiState.update { it.copy(rendering = false, stalePreview = asset != null) }
             return
         }
@@ -441,17 +464,19 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             try {
                 delay(debounceMillis)
                 val started = System.nanoTime()
+                val inputs = prepareSources(project, viewer, if (_uiState.value.fullDetail) null else 2560, reusePrimary = true)
                 val context = currentCoroutineContext()
                 val bitmap = withContext(Dispatchers.Default) {
-                    val result = renderer.render(RenderRequest(ticket, project.revision, pixels, project.effects,
-                        RenderQuality.PREVIEW, project.globalSeed, CancellationProbe { !context.isActive }, asset.width, asset.height,
-                        graph = project.processingGraph(), viewerNodeId = viewer, workingMemoryBudgetBytes = graphMemoryBudget()))
+                    val result = renderer.render(RenderRequest(ticket, project.revision, inputs.pixels.values.first(), project.effects,
+                        RenderQuality.PREVIEW, project.globalSeed, CancellationProbe { !context.isActive },
+                        graph = project.processingGraph(), viewerNodeId = viewer, sources = inputs.pixels,
+                        sourceDimensions = inputs.dimensions, workingMemoryBudgetBytes = graphMemoryBudget()))
                     ensureActive()
                     result.output.toBitmap()
                 }
                 ensureActive()
                 // Publication happens on Main, after conversion and after the last identity check.
-                if (ticket == previewGeneration.get() && boundSource == asset && sameRenderInputs(history.current, project) && _uiState.value.viewerNodeId == viewer) {
+                if (ticket == previewGeneration.get() && sameRenderInputs(history.current, project) && _uiState.value.viewerNodeId == viewer) {
                     renderedProject = history.current
                     renderedViewer = viewer
                     _uiState.update { it.copy(renderedBitmap = bitmap, rendering = false, stalePreview = false,
@@ -469,6 +494,32 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
     }
+    private data class PreparedSources(val pixels: Map<String, PixelBuffer>, val dimensions: Map<String, ImageDimensions>)
+
+    /** Decode only reachable assets. The renderer retains each source's document dimensions. */
+    private suspend fun prepareSources(project: ProjectState, viewer: String?, maximum: Int?, reusePrimary: Boolean): PreparedSources {
+        val graph = project.processingGraph()
+        val needed = GraphRules.requiredSources(project.effects, graph, viewer ?: graph.exportEndpoint().nodeId)
+        val assets = needed.associateWith { id -> project.sourceAsset(id)
+            ?: error("${graph.sources.getValue(id).label}: image missing. Select this source and use REPLACE IMAGE.") }
+        if (maximum == null) {
+            val bytes = assets.values.sumOf { it.width.toLong() * it.height * 4 }
+            val largest = assets.values.maxOf { it.width.toLong() * it.height * 4 }
+            require(bytes + largest * 7 <= graphMemoryBudget()) { "Images exceed full-resolution memory budget; choose a smaller export size" }
+        }
+        val pixels = linkedMapOf<String, PixelBuffer>()
+        for ((id, asset) in assets) {
+            currentCoroutineContext().ensureActive()
+            val existing = sourcePixels.takeIf { reusePrimary && id == SOURCE_NODE_ID && boundSource == asset &&
+                (_uiState.value.fullDetail == (maximum == null)) }
+            pixels[id] = existing ?: run {
+                val bitmap = if (maximum == null) sourceLoader.loadFull(asset) else sourceLoader.reopen(asset, maximum)
+                try { withContext(Dispatchers.Default) { bitmap.toPixelBuffer() } } finally { bitmap.recycle() }
+            }
+        }
+        return PreparedSources(pixels, assets.mapValues { ImageDimensions(it.value.width, it.value.height) })
+    }
+
     private fun sameRenderInputs(a: ProjectState, b: ProjectState): Boolean =
         a.copy(revision = 0, graph = a.graph?.copy(positions = emptyMap())) ==
             b.copy(revision = 0, graph = b.graph?.copy(positions = emptyMap()))
@@ -479,7 +530,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
             try { block(); _uiState.update { it.copy(message = success) } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (error: Exception) { failOperation(start, error) }
-            finally { _uiState.update { it.copy(operationInProgress = false) } }
+            finally { _uiState.update { it.copy(operationInProgress = false, rendering = true) }; scheduleRender() }
         }
     }
     private fun failOperation(prefix: String, error: Throwable) {

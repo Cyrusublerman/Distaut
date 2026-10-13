@@ -56,8 +56,10 @@ data class ProjectState(
     val globalSeed: Long = 42L,
     val revision: Long = 0L,
     val graph: ProcessingGraph? = null,
+    val assets: Map<String, SourceAsset> = emptyMap(),
 ) {
     init {
+        require(PRIMARY_ASSET_ID !in assets) { "Primary asset uses the source compatibility field" }
         require(schemaVersion >= 1)
         require(effects.map { it.id }.distinct().size == effects.size) {
             "Effect instance IDs must be unique"
@@ -79,8 +81,14 @@ data class ProjectState(
 }
 
 sealed interface EditorCommand {
+    data class AddSource(val nodeId: String, val assetId: String, val asset: SourceAsset, val label: String) : EditorCommand
+    data class ReplaceSource(val nodeId: String, val asset: SourceAsset) : EditorCommand
+    data class RemoveSource(val nodeId: String) : EditorCommand
+    data class SaveOutput(val id: String, val name: String, val endpoint: PortRef) : EditorCommand
+    data class SelectOutput(val id: String) : EditorCommand
+    data class RemoveOutput(val id: String) : EditorCommand
     data class AddGraphNode(val effect: EffectInstance, val upstream: String? = null) : EditorCommand
-    data class Connect(val from: String, val to: String, val input: String) : EditorCommand
+    data class Connect(val from: String, val to: String, val input: String, val output: String = DEFAULT_PORT_ID) : EditorCommand
     data class Disconnect(val to: String, val input: String) : EditorCommand
     data class SetGraphOutput(val nodeId: String) : EditorCommand
     data class SetNodePosition(val nodeId: String, val position: NodePosition) : EditorCommand
@@ -100,13 +108,56 @@ sealed interface EditorCommand {
 object ProjectReducer {
     fun reduce(state: ProjectState, command: EditorCommand): ProjectState {
         val next = when (command) {
+            is EditorCommand.AddSource -> {
+                val graph = state.processingGraph()
+                require(command.nodeId !in state.nodeIds() && command.assetId !in state.allAssets()) { "Source already exists" }
+                val nextGraph = graph.copy(sources = graph.sources + (command.nodeId to GraphSource(command.assetId, command.label)),
+                    positions = graph.positions + (command.nodeId to NodePosition(24f,
+                        ((graph.sources.keys.maxOfOrNull { graph.positions[it]?.y ?: 40f } ?: 40f) + 180f).coerceAtMost(9800f))))
+                GraphRules.validate(state.effects, nextGraph)
+                state.copy(graph = nextGraph, assets = state.assets + (command.assetId to command.asset))
+            }
+            is EditorCommand.ReplaceSource -> {
+                val assetId = state.processingGraph().sources[command.nodeId]?.assetId ?: error("Source node missing")
+                if (assetId == PRIMARY_ASSET_ID) state.copy(source = command.asset)
+                else state.copy(assets = state.assets + (assetId to command.asset))
+            }
+            is EditorCommand.RemoveSource -> {
+                require(command.nodeId != SOURCE_NODE_ID) { "The original source can be replaced; remove additional sources here" }
+                val graph = state.processingGraph()
+                val removed = graph.sources[command.nodeId] ?: error("Source node missing")
+                val outputs = graph.outputs.filterValues { it.endpoint.nodeId != command.nodeId }
+                val sources = graph.sources - command.nodeId
+                state.copy(assets = if (sources.values.none { it.assetId == removed.assetId }) state.assets - removed.assetId else state.assets,
+                    graph = graph.copy(sources = sources, connections = graph.connections.filterNot { it.from == command.nodeId },
+                        positions = graph.positions - command.nodeId, outputs = outputs,
+                        selectedOutputId = graph.selectedOutputId.takeIf { it in outputs } ?: DEFAULT_OUTPUT_ID,
+                        outputNodeId = graph.outputNodeId.takeUnless { it == command.nodeId } ?: SOURCE_NODE_ID))
+            }
+            is EditorCommand.SaveOutput -> {
+                val graph = state.processingGraph().copy(outputs = state.processingGraph().outputs +
+                    (command.id to GraphOutput(command.name.trim(), command.endpoint)), selectedOutputId = command.id)
+                GraphRules.validate(state.effects, graph)
+                state.copy(graph = graph)
+            }
+            is EditorCommand.SelectOutput -> {
+                val graph = state.processingGraph().copy(selectedOutputId = command.id)
+                GraphRules.validate(state.effects, graph)
+                state.copy(graph = graph)
+            }
+            is EditorCommand.RemoveOutput -> {
+                require(command.id != DEFAULT_OUTPUT_ID)
+                val graph = state.processingGraph()
+                state.copy(graph = graph.copy(outputs = graph.outputs - command.id,
+                    selectedOutputId = graph.selectedOutputId.takeUnless { it == command.id } ?: DEFAULT_OUTPUT_ID))
+            }
             is EditorCommand.AddGraphNode -> {
                 require(state.effects.none { it.id == command.effect.id }) { "Duplicate node ID" }
                 val graph = state.processingGraph()
                 val effects = state.effects + command.effect
                 val upstream = command.upstream ?: graph.outputNodeId
                 val input = GraphPorts.inputs(command.effect.type).entries.firstOrNull {
-                    it.value == GraphRules.outputType(upstream, state.effects)
+                    it.value == GraphRules.outputType(upstream, state.effects, graph)
                 }?.key
                 val position = graph.positions[upstream] ?: NodePosition(24f, 48f)
                 val connected = graph.copy(
@@ -122,7 +173,7 @@ object ProjectReducer {
             is EditorCommand.Connect -> {
                 val graph = state.processingGraph()
                 val nextGraph = graph.copy(connections = graph.connections.filterNot { it.to == command.to && it.input == command.input } +
-                    GraphConnection(command.from, command.to, command.input))
+                    GraphConnection(command.from, command.to, command.input, command.output))
                 GraphRules.validate(state.effects, nextGraph)
                 state.copy(graph = nextGraph)
             }
@@ -130,12 +181,12 @@ object ProjectReducer {
                 graph.copy(connections = graph.connections.filterNot { it.to == command.to && it.input == command.input })
             })
             is EditorCommand.SetGraphOutput -> {
-                val graph = state.processingGraph().copy(outputNodeId = command.nodeId)
+                val graph = state.processingGraph().copy(outputNodeId = command.nodeId, selectedOutputId = DEFAULT_OUTPUT_ID)
                 GraphRules.validate(state.effects, graph)
                 state.copy(graph = graph)
             }
             is EditorCommand.SetNodePosition -> {
-                require(command.nodeId == SOURCE_NODE_ID || state.effects.any { it.id == command.nodeId })
+                require(command.nodeId in state.processingGraph().sources || state.effects.any { it.id == command.nodeId })
                 state.copy(graph = state.processingGraph().let { it.copy(positions = it.positions + (command.nodeId to command.position)) })
             }
             is EditorCommand.ReplaceGraph -> {
@@ -157,6 +208,8 @@ object ProjectReducer {
                     connections = graph.connections.filterNot { it.from == command.effectId || it.to == command.effectId },
                     outputNodeId = graph.outputNodeId.takeUnless { it == command.effectId } ?: SOURCE_NODE_ID,
                     positions = graph.positions - command.effectId,
+                    outputs = graph.outputs.filterValues { it.endpoint.nodeId != command.effectId },
+                    selectedOutputId = graph.selectedOutputId.takeUnless { graph.outputs[it]?.endpoint?.nodeId == command.effectId } ?: DEFAULT_OUTPUT_ID,
                 ) },
                 effects = state.effects.filterNot { it.id == command.effectId },
                 soloEffectId = state.soloEffectId.takeUnless { it == command.effectId },
@@ -239,7 +292,7 @@ class ProjectHistory(initial: ProjectState, private val capacity: Int = 50) {
     }
 
     fun retainedSources(): Set<SourceAsset> = (past + future + listOfNotNull(current, transactionStart))
-        .mapNotNull { it.source }.toSet()
+        .flatMap { it.allAssets().values }.toSet()
 
     fun replace(project: ProjectState, clearHistory: Boolean = true): ProjectState {
         endTransaction()

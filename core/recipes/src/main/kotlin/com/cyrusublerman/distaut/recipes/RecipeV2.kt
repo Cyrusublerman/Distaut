@@ -8,7 +8,7 @@ import com.cyrusublerman.distaut.model.processingGraph
 import com.cyrusublerman.distaut.model.GraphRules
 
 data class RecipeV2(
-    val schemaVersion: Int = 4,
+    val schemaVersion: Int = 5,
     val engineVersion: String,
     val sourceChecksum: String?,
     val sourceWidth: Int?,
@@ -18,9 +18,10 @@ data class RecipeV2(
     val graph: ProcessingGraph? = null,
 ) {
     init {
-        require(schemaVersion in 2..4)
+        require(schemaVersion in 2..5)
         require(engineVersion.isNotBlank())
         require(graph == null || schemaVersion >= 4) { "Graph recipes require schema 4" }
+        require(schemaVersion >= 5 || graph == null || (graph.sources == ProcessingGraph().sources && graph.outputs.isEmpty())) { "Multiple sources and outputs require schema 5" }
     }
 }
 
@@ -36,6 +37,7 @@ object RecipeMapper {
     )
 
     fun applyToProject(recipe: RecipeV2, project: ProjectState): ProjectState = project.copy(
+        assets = project.assets.filterKeys { id -> recipe.graph?.sources?.values?.any { it.assetId == id } == true },
         effects = recipe.effects,
         graph = recipe.graph ?: GraphRules.chain(recipe.effects),
         soloEffectId = null,
@@ -67,7 +69,7 @@ object RecipeCodec {
     fun decodeAny(text: String, supportedEffectTypes: Set<String>): RecipeImportResult {
         val root = JsonCodec.parse(text).asObjectOrNull() ?: error("Recipe root must be a JSON object")
         return when {
-            root["schemaVersion"].asNumberOrNull()?.asIntExact()?.let { it in 2..4 } == true -> RecipeImportResult(decode(text, supportedEffectTypes))
+            root["schemaVersion"].asNumberOrNull()?.asIntExact()?.let { it in 2..5 } == true -> RecipeImportResult(decode(text, supportedEffectTypes))
             root["version"].asNumberOrNull()?.asIntExact() == 1 -> SiteBoyRecipeV1Importer.import(text)
             else -> error("Unrecognised recipe schema")
         }
@@ -76,7 +78,7 @@ object RecipeCodec {
     fun decode(text: String, supportedEffectTypes: Set<String>): RecipeV2 {
         val root = JsonCodec.parse(text).asObjectOrNull() ?: error("Recipe root must be a JSON object")
         val schema = root["schemaVersion"].asNumberOrNull()?.asIntExact() ?: error("Recipe schemaVersion is required")
-        require(schema in 2..4)
+        require(schema in 2..5)
         val source = root["source"].asObjectOrNull()
         val effects = root["effects"].asArrayOrNull()?.values
             ?.mapIndexed { index, node -> EffectJsonCodec.decode(node, index, supportedEffectTypes) }

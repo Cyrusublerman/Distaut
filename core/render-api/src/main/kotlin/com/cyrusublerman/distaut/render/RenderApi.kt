@@ -11,6 +11,8 @@ class PixelBuffer(val width: Int, val height: Int, val rgba: ByteArray) {
     fun copy(): PixelBuffer = PixelBuffer(width, height, rgba.copyOf())
 }
 
+data class ImageDimensions(val width: Int, val height: Int) { init { require(width > 0 && height > 0) } }
+
 enum class RenderQuality { PREVIEW, FINAL }
 fun interface CancellationProbe { fun isCancelled(): Boolean }
 /** All spatial parameters and matrix phases use oriented document pixels. */
@@ -29,6 +31,8 @@ data class RenderRequest(
     val graph: com.cyrusublerman.distaut.model.ProcessingGraph? = null,
     val viewerNodeId: String? = null,
     val workingMemoryBudgetBytes: Long = Long.MAX_VALUE,
+    val sources: Map<String, PixelBuffer> = emptyMap(),
+    val sourceDimensions: Map<String, ImageDimensions> = emptyMap(),
 ) {
     init { require(documentWidth > 0 && documentHeight > 0) }
     val scaleX: Double get() = source.width.toDouble() / documentWidth

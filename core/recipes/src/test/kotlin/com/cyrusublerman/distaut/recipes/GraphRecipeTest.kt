@@ -10,7 +10,7 @@ class GraphRecipeTest {
         val graph = GraphRules.chain(listOf(a, b)).copy(positions = mapOf(a.id to NodePosition(-32f, 900f)))
         val state = ProjectState(effects = listOf(a, b), graph = graph)
         val recipe = RecipeMapper.fromProject(state, "test")
-        assertEquals(4, recipe.schemaVersion)
+        assertEquals(5, recipe.schemaVersion)
         assertEquals(recipe, RecipeCodec.decode(RecipeCodec.encode(recipe), setOf("invert")))
     }
     @Test fun legacyRecipeMigratesToConnectedChainWithoutVersionChanges() {
@@ -20,6 +20,26 @@ class GraphRecipeTest {
         assertEquals("b", state.graph!!.outputNodeId)
         assertNull(state.effects[0].algorithmVersion)
         assertEquals(1, state.effects[0].compositionVersion)
+    }
+    @Test fun multiSourceRecipeRetainsSlotsAndNamedOutputWithoutEmbeddingImages() {
+        val graph = ProcessingGraph(sources = ProcessingGraph().sources + ("b" to GraphSource("asset-b", "Second")),
+            outputs = mapOf("other" to GraphOutput("Other", PortRef("b"))), selectedOutputId = "other")
+        val state = ProjectState(graph = graph, assets = mapOf("asset-b" to SourceAsset("file:/private/photo", width = 9, height = 3)))
+        val encoded = RecipeCodec.encode(RecipeMapper.fromProject(state, "test"))
+        assertFalse(encoded.contains("file:/private/photo"))
+        val recipe = RecipeCodec.decode(encoded, emptySet())
+        assertEquals(graph, recipe.graph)
+        val applied = RecipeMapper.applyToProject(recipe, ProjectState())
+        assertNull(applied.sourceAsset("b"))
+        assertEquals(graph, applied.graph)
+    }
+    @Test fun graphVersionOneMigratesToAnExplicitSourceAndOutputPort() {
+        val old = """{"schemaVersion":4,"engineVersion":"old","effects":[{"id":"a","type":"invert"}],"graph":{"version":1,"outputNodeId":"a","connections":[{"from":"@source","to":"a","input":"image"}]}}"""
+        val graph = RecipeCodec.decode(old, setOf("invert")).graph!!
+        assertEquals(2, graph.version)
+        assertEquals(PRIMARY_ASSET_ID, graph.sources.getValue(SOURCE_NODE_ID).assetId)
+        assertEquals(PortRef(SOURCE_NODE_ID), graph.connection("a", "image")!!.source)
+        assertEquals(PortRef("a"), graph.exportEndpoint())
     }
     @Test fun malformedGraphCannotSilentlyFallBackToAList() {
         val bad = """{"schemaVersion":4,"engineVersion":"test","effects":[],"graph":{"version":1,"outputNodeId":"gone","connections":[]}}"""

@@ -173,8 +173,10 @@ object BuiltInEffects {
         ),
     )
 
-    val Mix = EffectDefinition("mix", "MIX IMAGES", "COMPOSITE", "associated-mix-v1", listOf(
+    val Mix = EffectDefinition("mix", "MIX IMAGES", "COMPOSITE", "associated-mix-v2", listOf(
         ParameterDefinition.Decimal("amount", "MIX B", ParameterValue.Decimal(0.5), 0.0, 1.0, 0.01),
+        ParameterDefinition.Choice("fit", "ALIGN IMAGE B", ParameterValue.Choice("fit"), listOf("fit", "fill", "stretch", "native")),
+        ParameterDefinition.Choice("maskFit", "ALIGN MASK", ParameterValue.Choice("stretch"), listOf("fit", "fill", "stretch", "native")),
     ))
     val LuminanceMask = EffectDefinition("luminance_mask", "LUMINANCE MASK", "MASK", "encoded-luma-mask-v1", listOf(
         ParameterDefinition.Decimal("threshold", "THRESHOLD", ParameterValue.Decimal(0.5), 0.0, 1.0, 0.01),
